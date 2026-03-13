@@ -11,9 +11,11 @@ scanner alerts, and yield monitor all function without exchange API keys.
 
 ## Deploy to Railway
 
-Click the link in your purchase confirmation email to deploy a private
-instance to Railway. The deploy flow will prompt you for your environment
-variables before the container starts.
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new?template=https://github.com/getbreadbot/breadbot-deploy)
+
+Click the button above (or the link in your purchase confirmation email) to
+deploy a private instance to Railway. The deploy flow will prompt you for
+your environment variables before the container starts.
 
 **Required variables:**
 - `TELEGRAM_BOT_TOKEN` — from @BotFather in Telegram

@@ -1,0 +1,79 @@
+/* ── Breadbot Help System — Tippy.js theme + help icon styles ────────────────
+   New file — does not modify any existing CSS.
+   Load after terminal.css in index.html.
+   ──────────────────────────────────────────────────────────────────────────── */
+
+/* ── Tippy theme: breadbot ──────────────────────────────────────────────────── */
+.tippy-box[data-theme~='breadbot'] {
+  background-color: #1a1d23;
+  color: #e8eaf0;
+  border: 1px solid #2a2d35;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-family: 'DM Sans', sans-serif;
+  max-width: 280px;
+}
+
+.tippy-box[data-theme~='breadbot'] .tippy-content {
+  padding: 10px 13px;
+}
+
+/* Arrow inherits border color */
+.tippy-box[data-theme~='breadbot'] .tippy-arrow {
+  color: #2a2d35;
+}
+
+/* ── Help icon button (44×44 tap target) ─────────────────────────────────────
+   The outer <button> is the full touch target.
+   The inner .help-icon-inner is the visible 16×16 circle.
+   ──────────────────────────────────────────────────────────────────────────── */
+.help-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  vertical-align: middle;
+  margin: -14px -14px;
+  flex-shrink: 0;
+}
+
+.help-icon-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: transparent;
+  border: 1px solid #5a5d65;
+  color: #5a5d65;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+  transition: border-color 0.15s ease, color 0.15s ease;
+  pointer-events: none;
+}
+
+.help-icon:hover .help-icon-inner,
+.help-icon:focus-visible .help-icon-inner {
+  border-color: #f59e0b;
+  color: #f59e0b;
+}
+
+.help-icon:active .help-icon-inner {
+  border-color: #d97706;
+  color: #d97706;
+}
+
+.help-icon:focus-visible {
+  outline: 2px solid rgba(245, 158, 11, 0.4);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

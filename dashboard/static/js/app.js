@@ -1451,4 +1451,4 @@ const Pages = {
   },
 };
 
-document.addEventListener('DOMContentLoaded', () => App.init());
+document.addEventListener('DOMContentLoaded', () => { App.init(); HelpSystem.init(); });

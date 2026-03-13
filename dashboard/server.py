@@ -374,6 +374,21 @@ def action_force_scan():
 
 # ── POST: Reset daily counters ────────────────────────────────────────────────
 
+@app.post("/api/tour-complete")
+def api_tour_complete():
+    """Mark the onboarding tour as complete so it doesn't re-fire."""
+    conn = get_db_rw()
+    try:
+        conn.execute("""
+            INSERT OR REPLACE INTO bot_config (key, value, updated_at)
+            VALUES ('tour_complete', '1', datetime('now'))
+        """)
+        conn.commit()
+        return JSONResponse({"ok": True})
+    finally:
+        conn.close()
+
+
 @app.post("/api/action/reset-daily")
 def action_reset_daily():
     """Reset daily counters by clearing today's decision data and loss tracking."""
