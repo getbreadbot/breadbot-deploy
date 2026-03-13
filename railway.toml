@@ -1,0 +1,75 @@
+[deploy]
+startCommand = "./start.sh"
+healthcheckPath = "/api/status"
+healthcheckTimeout = 60
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
+
+# ── Required: Telegram ─────────────────────────────────────────────────────
+[[deploy.envVars]]
+name = "TELEGRAM_BOT_TOKEN"
+description = "Your Telegram bot token from @BotFather (looks like 7123456789:AAF...)"
+required = true
+
+[[deploy.envVars]]
+name = "TELEGRAM_CHAT_ID"
+description = "Your Telegram numeric chat ID from @userinfobot"
+required = true
+
+# ── Required: License ──────────────────────────────────────────────────────
+[[deploy.envVars]]
+name = "LICENSE_KEY"
+description = "Your Breadbot license key (received via email after purchase at breadbot.app)"
+required = true
+
+# ── Exchange API Keys ──────────────────────────────────────────────────────
+[[deploy.envVars]]
+name = "COINBASE_API_KEY"
+description = "Coinbase Advanced Trade API key — View + Trade permissions only, never Transfer"
+required = false
+
+[[deploy.envVars]]
+name = "COINBASE_API_SECRET"
+description = "Coinbase Advanced Trade API secret"
+required = false
+
+[[deploy.envVars]]
+name = "KRAKEN_API_KEY"
+description = "Kraken API key — Query Funds + Trade permissions only"
+required = false
+
+[[deploy.envVars]]
+name = "KRAKEN_API_SECRET"
+description = "Kraken API secret"
+required = false
+
+# ── Risk Settings (safe defaults, adjust in dashboard after deploy) ─────────
+[[deploy.envVars]]
+name = "MAX_POSITION_SIZE_PCT"
+description = "Max % of portfolio per trade (default 0.02 = 2% on a $5k account = $100/trade)"
+required = false
+defaultValue = "0.02"
+
+[[deploy.envVars]]
+name = "DAILY_LOSS_LIMIT_PCT"
+description = "Circuit breaker: pause trading if daily loss hits this % (default 0.05 = 5%)"
+required = false
+defaultValue = "0.05"
+
+[[deploy.envVars]]
+name = "MIN_LIQUIDITY_USD"
+description = "Minimum token liquidity to send an alert (default $15,000)"
+required = false
+defaultValue = "15000"
+
+[[deploy.envVars]]
+name = "MIN_VOLUME_24H_USD"
+description = "Minimum 24h volume to send an alert (default $40,000)"
+required = false
+defaultValue = "40000"
+
+# ── Optional: GoPlus (raises rug check rate limits) ────────────────────────
+[[deploy.envVars]]
+name = "GOPLUS_API_KEY"
+description = "GoPlus API key — free at gopluslabs.io, raises rate limits for the scanner"
+required = false

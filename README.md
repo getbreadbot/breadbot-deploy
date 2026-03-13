@@ -1,33 +1,52 @@
-# Breadbot — One-Click Deploy
+# Breadbot — Deploy Repository
 
-Breadbot is an automated crypto trading dashboard that scans Solana and Base
-for high-scoring token opportunities, monitors stablecoin yields across six
-platforms, and gives you full control from a browser dashboard and Telegram.
+This is the private deployment repository for Breadbot license holders.
 
-## What This Deploys
+## What This Contains
 
-This repository contains the deployment configuration for the Breadbot dashboard.
-Clicking the button below provisions a fresh instance on Railway with the demo
-database pre-loaded. Your license key (received after purchase at breadbot.app)
-unlocks the full live trading features.
+The complete Breadbot application: scanner, risk manager, yield monitor,
+dashboard, and all exchange connectors. Your license key (received after
+purchase at breadbot.app) unlocks live trading features. The dashboard,
+scanner alerts, and yield monitor all function without exchange API keys.
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/breadbot-app/breadbot-deploy)
+## Deploy to Railway
 
-## Setup After Deploy
+Click the link in your purchase confirmation email to deploy a private
+instance to Railway. The deploy flow will prompt you for your environment
+variables before the container starts.
 
-1. Open your Railway dashboard and find the deployed Breadbot service
-2. Go to Variables and add your environment variables (full list in the
-   setup guide included with your purchase)
-3. Redeploy — the dashboard will be live at your Railway-provided URL
-4. Follow the PDF setup guide to connect your exchange API keys and Telegram
+**Required variables:**
+- `TELEGRAM_BOT_TOKEN` — from @BotFather in Telegram
+- `TELEGRAM_CHAT_ID` — from @userinfobot in Telegram
+- `LICENSE_KEY` — from your purchase confirmation email
 
-## Requirements
+**Optional (needed for live trade execution):**
+- `COINBASE_API_KEY` / `COINBASE_API_SECRET`
+- `KRAKEN_API_KEY` / `KRAKEN_API_SECRET`
 
-You need a Railway account (free tier works for the dashboard). Live trading
-features require Coinbase Advanced Trade and/or Kraken API keys, which you
-configure as environment variables — never hardcoded.
+All other risk and scanner settings have safe defaults and can be adjusted
+in the dashboard after deploy.
+
+## Persistent Storage
+
+Your scan history, positions, and yield data live in a SQLite database at
+`/app/data/cryptobot.db`. To keep this data across redeploys:
+
+1. In your Railway project, go to your service → Settings → Volumes
+2. Add a volume mounted at `/app/data`
+3. Redeploy
+
+Without a volume, the database resets on every deploy. The dashboard will
+still work — it reseeds with demo data automatically on first run.
+
+## First Deploy Experience
+
+On first start, the dashboard seeds realistic demo data so you see a fully
+populated UI immediately. Once your real Telegram and exchange keys are set,
+live data starts flowing and the demo data fades out naturally as real
+activity replaces it.
 
 ## Support
 
 Purchase support: hello@breadbot.app
-Documentation: included with purchase (PDF setup guide)
+Setup guide: included in your purchase confirmation email

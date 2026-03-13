@@ -1,0 +1,45 @@
+# Breadbot — Core dependencies
+# Run: pip install -r requirements.txt
+# Requires Python 3.11+
+
+# Exchange connectivity
+ccxt==4.3.89                   # Unified API for Coinbase, Kraken, and 100+ exchanges
+coinbase-advanced-py==1.7.0    # Official Coinbase Advanced Trade SDK
+
+# Solana / Jupiter DEX execution
+solders>=0.21.0                # Solana keypair, transaction signing
+base58>=2.1.1                  # Private key encoding/decoding
+
+# Base / EVM DEX execution
+web3>=7.0.0                    # Ethereum/Base RPC + contract interaction
+eth-account>=0.13.0            # EVM wallet key management
+
+# Telegram bot (your control panel)
+python-telegram-bot==21.6      # Telegram notifications and trade approvals
+
+# HTTP requests for DEXScreener, GoPlus, etc.
+httpx==0.27.2                  # Async HTTP client
+aiohttp==3.10.5                # Async HTTP for concurrent API calls
+
+# Data handling
+python-dotenv==1.0.1           # Loads your API keys from .env file safely
+pandas==2.2.2                  # Data analysis for price/volume data
+numpy==1.26.4                  # Math for position sizing calculations
+
+# Scheduling and async
+apscheduler==3.10.4            # Run scanner every 5 minutes, yield check every hour
+asyncio-throttle==1.0.2        # Rate limiting so you don't get banned by APIs
+
+# Database (local SQLite - no server needed)
+aiosqlite==0.20.0              # Async SQLite for storing trades and positions
+
+# Logging and monitoring
+loguru==0.7.2                  # Clean, readable logs
+rich==13.8.0                   # Pretty terminal output with colors
+
+# MCP server (Phase 3 — Claude Desktop integration)
+fastmcp==3.1.0                 # MCP server for Claude tool access
+
+# Utilities
+python-dateutil==2.9.0         # Date/time handling
+pytz==2024.1                   # Timezone handling (EST)

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Breadbot Terminal</title>
+  <link rel="icon" type="image/svg+xml" href="/static/img/favicon.svg"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="/static/css/terminal.css"/>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <svg width="36" height="36" viewBox="0 0 32 36" fill="none"><line x1="8" y1="5" x2="8" y2="31" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/><polyline points="8,5 18,5 24,9 24,14 16,18 8,18" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="8,18 17,18 25,22 25,27 17,31 8,31" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span class="logo-text">BREADBOT</span>
+    </div>
+    <div class="sidebar-status">
+      <span class="status-dot" id="status-dot"></span>
+      <span class="status-label" id="status-label">LOADING</span>
+    </div>
+    <nav class="sidebar-nav">
+      <a href="#overview"  class="nav-item active" data-page="overview"><span class="nav-icon">▦</span> Overview</a>
+      <a href="#positions" class="nav-item" data-page="positions"><span class="nav-icon">◎</span> Positions</a>
+      <a href="#alerts"    class="nav-item" data-page="alerts"><span class="nav-icon">◈</span> Alert Feed</a>
+      <a href="#yields"    class="nav-item" data-page="yields"><span class="nav-icon">◇</span> Yields</a>
+      <a href="#trades"    class="nav-item" data-page="trades"><span class="nav-icon">▷</span> Trade Log</a>
+      <a href="#flashloans" class="nav-item" data-page="flashloans"><span class="nav-icon">⚡</span> Flash Loans</a>
+      <a href="#analytics" class="nav-item" data-page="analytics"><span class="nav-icon">📊</span> Analytics</a>
+      <a href="#research"  class="nav-item" data-page="research"><span class="nav-icon">🔍</span> Research</a>
+      <a href="#controls"  class="nav-item" data-page="controls"><span class="nav-icon">⊕</span> Controls</a>
+    </nav>
+    <div class="sidebar-footer">
+      <div class="refresh-info">
+        <span class="refresh-label">AUTO-REFRESH</span>
+        <span class="refresh-countdown" id="refresh-countdown">30s</span>
+      </div>
+      <div class="last-updated" id="last-updated">—</div>
+    </div>
+  </aside>
+  <main class="main-content">
+    <div id="top-notify-bar"></div>
+    <div id="page-container">
+      <div class="loading-screen">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">INITIALIZING TERMINAL</div>
+      </div>
+    </div>
+  </main>
+  <script src="/static/js/wizard.js"></script>
+  <script src="/static/js/format.js"></script>
+  <script src="/static/js/charts.js"></script>
+  <script src="/static/js/app.js"></script>
+  <div id="toast-container"></div>
+</body>
+</html>
