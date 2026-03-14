@@ -1,0 +1,362 @@
+{
+  "_meta": {
+    "source_language": "en",
+    "version": "1.0.0",
+    "surfaces": ["landing", "dashboard", "telegram", "email"],
+    "never_translate": ["Breadbot", "USDC", "SOL", "ETH", "DeFi", "APY", "APR", "TVL", "Base", "Solana", "DEXScreener", "GoPlus", "RugCheck", "Coinbase", "Kraken", "Aave", "Morpho", "Aerodrome", "Uniswap", "Telegram", "Python", ".env", "pip"]
+  },
+
+  "landing": {
+    "nav": {
+      "features": "Features",
+      "how_it_works": "How It Works",
+      "pricing": "Pricing",
+      "faq": "FAQ",
+      "live_demo": "Live Demo",
+      "buy_now": "Buy Now"
+    },
+    "hero": {
+      "badge": "Live on Base Mainnet",
+      "headline_1": "Your Crypto Bot.",
+      "headline_2": "Running 24/7.",
+      "subheadline": "Breadbot scans Solana and Base for high-scoring meme coin opportunities, monitors stablecoin yields across six platforms, and executes flash loan arbs — all from a browser dashboard you control from your phone. Run it in Manual mode and approve each trade, or switch to Auto and let your strategy execute while you sleep. Change modes anytime from your phone.",
+      "cta_demo": "View Live Demo",
+      "cta_pricing": "See Pricing",
+      "trust_1": "Your funds never leave Coinbase or Kraken — trade-only API access",
+      "trust_2": "30-day money-back guarantee — no questions asked"
+    },
+    "stats": {
+      "scan_interval_label": "Scan Interval",
+      "scan_interval_value": "5 MIN",
+      "yield_platforms_label": "Yield Platforms",
+      "api_endpoints_label": "API Endpoints",
+      "capital_at_risk_label": "Capital At Risk Per Arb"
+    },
+    "features": {
+      "eyebrow": "What It Does",
+      "headline_1": "Three bots.",
+      "headline_2": "One dashboard.",
+      "subheadline": "Every system runs simultaneously and writes to a single SQLite database. Every alert, trade decision, yield reading, and arb attempt — permanently logged.",
+      "scanner_title": "Meme Coin Scanner",
+      "scanner_desc": "Polls DEXScreener every five minutes across Solana and Base. Every candidate passes through GoPlus and RugCheck before an alert reaches your phone. Honeypots, blacklist functions, and suspicious ownership patterns are filtered before you ever see them.",
+      "yield_title": "Yield Monitor",
+      "yield_desc": "Checks APY across Coinbase, Aave V3, Coinbase Morpho, and Kraken every hour. Saves every reading to a local database and alerts you when any rate moves more than 0.5%. Builds a yield history you can chart and reference when allocating capital.",
+      "flash_title": "Flash Loan Arb",
+      "flash_desc": "Borrows USDC from Aave V3, swaps to WETH on Uniswap V3, swaps back on Aerodrome, repays Aave, and keeps the spread — all in one transaction. If the minimum profit threshold is not met, the entire transaction reverts. No capital at risk on failed arbs.",
+      "auto_title": "Manual or Auto — You Decide",
+      "auto_desc": "Approve every trade yourself, or set a strategy and let Breadbot execute automatically. Conservative, Balanced, and Aggressive presets control exactly which tokens qualify. Your daily loss limit acts as an automatic circuit breaker no matter which mode you choose."
+    },
+    "dashboard_preview": {
+      "eyebrow": "The Dashboard",
+      "headline_1": "9 pages.",
+      "headline_2": "No terminal",
+      "headline_3": "required.",
+      "subheadline": "Run it on your Mac, a VPS, or anywhere Python runs. Every number updates live from the same database the bot writes to.",
+      "list_1": "Overview, Positions, Alert Feed",
+      "list_2": "Yields, Trade Log, Flash Loans",
+      "list_3": "Analytics, Research, Controls",
+      "list_4": "22 API endpoints, keyboard shortcuts",
+      "list_5": "Pause, resume, edit risk params from the browser",
+      "cta_demo": "Open Live Demo"
+    },
+    "how_it_works": {
+      "eyebrow": "How It Works",
+      "headline_1": "Install once.",
+      "headline_2": "Run forever.",
+      "subheadline": "One pip command, one .env file, one terminal window to start. Everything after that is Telegram and a browser.",
+      "step_1_title": "Install",
+      "step_1_desc": "Python 3.11 and a single pip install -r requirements.txt. Runs on Mac, Windows, or any Linux VPS.",
+      "step_2_title": "Configure",
+      "step_2_desc": "Fill in your .env file — Telegram token, exchange API keys, risk parameters. The setup guide walks through every field.",
+      "step_3_title": "Run",
+      "step_3_desc": "python main.py starts all three systems. A startup message to your Telegram confirms it's live.",
+      "step_4_title": "Control",
+      "step_4_desc": "Approve trades, check yields, pause the bot, edit risk limits — all from Telegram or the browser dashboard."
+    },
+    "auto_mode": {
+      "eyebrow": "Auto Mode",
+      "headline_1": "Set your rules.",
+      "headline_2": "The bot follows them.",
+      "subheadline": "Three steps between your strategy and fully automatic execution. Every trade still respects your daily loss limit and stop-loss settings.",
+      "step_1_title": "Set your strategy",
+      "step_1_desc": "Choose Conservative, Balanced, or Aggressive. Each preset defines the minimum security score and market cap range a token must hit before the bot executes automatically.",
+      "step_2_title": "Let the scanner run",
+      "step_2_desc": "Breadbot polls DEXScreener every 5 minutes. Each new token is scored against 15 automated security checks. Only tokens that pass your preset thresholds are executed — everything else is ignored or sent for manual review.",
+      "step_3_title": "Get notified",
+      "step_3_desc": "Every auto-executed trade sends a Telegram notification instantly: token name, entry price, amount, and your updated position count. Your configured stop-loss is set at the same moment."
+    },
+    "pricing": {
+      "eyebrow": "Pricing",
+      "headline_1": "One-time.",
+      "headline_2": "Yours to own.",
+      "subheadline": "Full source code. No subscriptions, no usage limits. Deploy anywhere and run it as long as you want.",
+      "personal_name": "Personal",
+      "personal_price": "997",
+      "personal_billing": "one-time · single machine",
+      "professional_name": "Professional",
+      "professional_price": "2,497",
+      "professional_billing": "one-time · 3 machine license",
+      "professional_badge": "Most Popular",
+      "custom_name": "Custom",
+      "custom_billing": "white-label · custom build",
+      "custom_cta": "Get in Touch",
+      "feature_source_code": "Full source code",
+      "feature_setup_guide": "Setup guide (PDF)",
+      "feature_support_30": "30 days email support",
+      "feature_support_90": "90 days email support",
+      "feature_single_machine": "Single machine license",
+      "feature_3_machine": "3 machine license",
+      "feature_auto_execution": "Auto-execution with Conservative / Balanced / Aggressive strategy presets",
+      "feature_vps_guide": "VPS deploy guide included",
+      "feature_priority": "Priority response",
+      "feature_white_label": "White-label rights",
+      "feature_custom_dev": "Custom feature development",
+      "feature_unlimited": "Unlimited machines",
+      "feature_co_dev": "Co-development available",
+      "feature_nda": "NDA available",
+      "buy_personal": "Buy Personal",
+      "buy_professional": "Buy Professional",
+      "renewal_note": "Optional annual renewal at $497/yr keeps you current on updates, new exchange connectors, and ongoing support. Never required to keep running what you already have."
+    },
+    "faq": {
+      "eyebrow": "FAQ",
+      "headline": "Common questions.",
+      "q1": "Can Breadbot access or withdraw my funds?",
+      "a1": "No. Breadbot connects using read-and-trade-only API keys. It can see balances and place trades but cannot move funds anywhere. Withdraw and Transfer permissions are never requested during setup. Your exchange credentials remain on your own machine in an encrypted .env file that only you control.",
+      "q2": "Is it safe to let a bot trade for me?",
+      "a2": "In many ways safer than manual trading. Breadbot follows your rules exactly — no panic selling, no FOMO buying. Every trade respects position size limits, and the daily loss circuit breaker pauses everything automatically if losses reach your threshold. You can override, pause, or stop with one click anytime.",
+      "q3": "What happens if the market crashes while my bot is running?",
+      "a3": "Breadbot has two automatic protection layers. Every position includes a stop-loss that exits if the token drops to your configured level. The daily loss limit pauses all trading if total losses hit your threshold, default 5% of portfolio. You receive a Telegram notification the moment either triggers.",
+      "q4": "Do I need trading experience to use Breadbot?",
+      "a4": "No. Start with the Balanced strategy preset which has sensible defaults for everything. The dashboard explains every metric in plain English with help icons. A guided walkthrough runs the first time you open the dashboard and covers every important section in about three minutes.",
+      "q5": "How long does setup take?",
+      "a5": "About five minutes from purchase to first live scan. The setup wizard walks you through connecting exchange API keys, linking Telegram for alerts, and confirming risk settings. The bot sends a Telegram message the moment it goes live confirming everything worked correctly.",
+      "q6": "Can I try it without risking real money?",
+      "a6": "Yes. Paper trading mode runs the full scanner and shows alerts and decisions exactly as they would appear live, but no real trades are placed. Use paper mode to get comfortable with the dashboard and verify your strategy settings before switching to live trading.",
+      "q7": "What is the difference between Manual and Auto mode?",
+      "a7": "In Manual mode, Breadbot finds qualifying tokens, runs security checks, and sends a Telegram message with Buy or Skip buttons. Nothing executes without your approval. In Auto mode, tokens passing your configured security score and market cap thresholds execute immediately. Daily loss limits work identically in both modes.",
+      "q8": "What does the security score mean?",
+      "a8": "A 100-point score summarizing automated rug pull checks on every new token. It starts at 100 and loses points for specific red flags: sell tax above 5%, pausable contracts, changeable balances, concentrated ownership. Tokens scoring below 50 never reach you. Each alert shows exactly which checks deducted points.",
+      "q9": "How much do I need to invest?",
+      "a9": "There is no minimum required by Breadbot. Default settings are designed for $1,000–$10,000 accounts with each trade capped at 2% of portfolio. On a $1,000 account that means $20 per trade. The bot works on any account size with proportional position scaling.",
+      "q10": "Will I definitely make money?",
+      "a10": "No one can guarantee profits in crypto. Breadbot executes consistently, removes emotional decisions, and filters out most low-quality tokens automatically — but markets can move against any position. Start with paper trading and only invest money you can afford to lose. The 30-day money-back guarantee lets you evaluate risk-free.",
+      "q11": "Which exchanges are supported?",
+      "a11": "Coinbase Advanced Trade and Kraken for live trading. Solana and Base DEX pairs are monitored via DEXScreener for scanner alerts but executed through your connected CEX accounts. Yield monitoring covers Coinbase, Aave V3, Morpho, and Kraken. Additional exchange support is in development.",
+      "q12": "Can I stop, pause, or change settings anytime?",
+      "a12": "Yes to all three. Pause trading instantly from Telegram with /pause or from the Controls page — the bot stops immediately. Resume the same way with /resume. Change risk settings, strategy, and execution mode anytime from Controls, with changes taking effect on the next scan cycle. No lock-in periods."
+    },
+    "trust_badges": {
+      "badge_1": "Trade-only API — withdrawals impossible",
+      "badge_2": "Stop-loss on every position",
+      "badge_3": "Pause instantly from Telegram",
+      "badge_4": "30-day money-back guarantee"
+    },
+    "footer": {
+      "demo": "Demo",
+      "docs": "Docs",
+      "support": "Support",
+      "pricing": "Pricing",
+      "copyright": "Breadbot © 2026",
+      "disclaimer": "Crypto trading involves significant risk of loss. This software is provided as-is without warranty of any kind. Past performance does not indicate future results. You are solely responsible for your trading decisions and any resulting gains or losses."
+    },
+    "seo": {
+      "title": "Breadbot — Automated Crypto Trading Bot | 24/7 Meme Coin Scanner",
+      "description": "Automated crypto trading bot scanning Solana and Base for meme coins, monitoring stablecoin yields, and executing trades 24/7. One-time price.",
+      "og_title": "Breadbot — Crypto Trading Bot Running 24/7",
+      "og_description": "Automated crypto trading bot scanning Solana and Base for meme coins, monitoring stablecoin yields, and executing trades 24/7. Full source code, one-time price."
+    }
+  },
+
+  "dashboard": {
+    "nav": {
+      "overview": "Overview",
+      "positions": "Positions",
+      "alerts": "Alert Feed",
+      "yields": "Yields",
+      "trades": "Trade Log",
+      "flashloans": "Flash Loans",
+      "analytics": "Analytics",
+      "research": "Research",
+      "controls": "Controls"
+    },
+    "status": {
+      "active": "ACTIVE",
+      "paused": "PAUSED",
+      "loading": "LOADING",
+      "initializing": "INITIALIZING TERMINAL",
+      "auto_refresh": "AUTO-REFRESH"
+    },
+    "overview": {
+      "page_title": "OVERVIEW",
+      "bot_status_label": "BOT STATUS",
+      "today_pnl_label": "TODAY P&L",
+      "daily_loss_label": "DAILY LOSS LIMIT",
+      "portfolio_util_label": "PORTFOLIO UTILIZATION",
+      "open_positions_label": "OPEN POSITIONS",
+      "alerts_today_label": "ALERTS TODAY",
+      "buys_today_label": "BUYS TODAY",
+      "last_scan_label": "LAST SCAN",
+      "chain_balances": "CHAIN BALANCES",
+      "flash_loan_arbs": "FLASH LOAN ARBS",
+      "btn_resume": "Resume Trading",
+      "btn_pause": "Pause Trading",
+      "btn_force_scan": "Force Scan",
+      "btn_refresh": "Refresh",
+      "no_data_banner": "Bot has not run yet. Start main.py to begin collecting data."
+    },
+    "alerts": {
+      "page_title": "ALERT FEED",
+      "filter_label": "Filter:",
+      "filter_last_24h": "Last 24h",
+      "filter_last_7d": "Last 7 days",
+      "filter_last_30d": "Last 30 days",
+      "filter_all": "All decisions",
+      "filter_pending": "Pending",
+      "filter_buy": "Bought",
+      "filter_skip": "Skipped",
+      "filter_all_chains": "All chains",
+      "col_time": "TIME",
+      "col_token": "TOKEN",
+      "col_chain": "CHAIN",
+      "col_score": "SCORE",
+      "col_liquidity": "LIQUIDITY",
+      "col_volume": "VOL 24H",
+      "col_decision": "DECISION / ACTION",
+      "btn_buy": "Buy",
+      "btn_skip": "Skip",
+      "empty_title": "NO ALERTS MATCH YOUR FILTERS",
+      "keyboard_hint": "Keyboard: B Buy · S Skip (hover a row)"
+    },
+    "positions": {
+      "page_title": "POSITIONS",
+      "col_token": "TOKEN",
+      "col_chain": "CHAIN",
+      "col_entry": "ENTRY",
+      "col_current": "CURRENT",
+      "col_size": "SIZE",
+      "col_unrealized": "UNREAL. P&L",
+      "col_stop": "STOP",
+      "col_target": "TARGET",
+      "col_opened": "OPENED",
+      "col_action": "ACTION",
+      "empty_open": "NO OPEN POSITIONS",
+      "section_closed": "RECENTLY CLOSED",
+      "btn_close": "Close",
+      "prices_updated": "Prices last updated {seconds}s ago · Auto-refreshes every 60s"
+    },
+    "yields": {
+      "page_title": "YIELD MONITOR",
+      "subtitle": "Stablecoin yields · Updated hourly",
+      "best_badge": "BEST",
+      "recommendation_title": "Best For Your Capital",
+      "recommendation_body": "At {apy}% APY, {platform} ({asset}) is currently the best rate. A $20,000 allocation earns ~${monthly}/mo.",
+      "no_data": "No yield data yet. Yield monitor runs every hour.",
+      "monthly_label": "~${amount}/mo per $1,000"
+    },
+    "controls": {
+      "page_title": "CONTROLS",
+      "subtitle": "Bot management · Trade execution · Settings",
+      "trading_state_title": "Trading State",
+      "scanner_title": "Scanner",
+      "scanner_desc": "Last scan: {ago}. Runs automatically every 5 minutes.",
+      "alltime_title": "All-Time Stats",
+      "today_title": "Today",
+      "yield_summary_title": "Best Yield Available",
+      "daily_reset_title": "Daily Reset",
+      "daily_reset_desc": "Reset today's counters (alerts, buys, skips, daily P&L tracking). Does not affect open positions or trade history.",
+      "quicknav_title": "Quick Nav",
+      "bot_info_title": "Bot Info",
+      "risk_params_title": "RISK PARAMETERS",
+      "btn_resume": "Resume Trading",
+      "btn_pause": "Pause Trading",
+      "btn_force_scan": "Force Scan Now",
+      "btn_reset_daily": "Reset Daily Counters",
+      "btn_save_risk": "Save Changes",
+      "btn_view_yields": "View Yields"
+    },
+    "common": {
+      "loading": "Loading...",
+      "error": "ERROR",
+      "refresh": "Refresh",
+      "no_data": "No data yet",
+      "ago_just_now": "just now",
+      "ago_minutes": "{n}m ago",
+      "ago_hours": "{n}h ago",
+      "ago_days": "{n}d ago",
+      "save": "Save",
+      "cancel": "Cancel",
+      "confirm": "Confirm",
+      "close": "Close",
+      "export_csv": "Export CSV"
+    }
+  },
+
+  "telegram": {
+    "status": {
+      "title": "*Breadbot Status*",
+      "trading_active": "🟢 Active",
+      "trading_paused": "🔴 Paused",
+      "trading_label": "Trading:",
+      "daily_pnl_label": "Daily P&L:",
+      "loss_used_label": "Loss used:",
+      "positions_label": "Positions:",
+      "portfolio_label": "Portfolio:"
+    },
+    "yields": {
+      "title": "*Current Stablecoin Yields*",
+      "no_data": "No yield data yet. Runs on the hour."
+    },
+    "positions": {
+      "title": "*Open Positions*",
+      "no_positions": "No open positions.",
+      "entry_label": "Entry",
+      "stop_label": "Stop",
+      "size_label": "Size"
+    },
+    "commands": {
+      "paused": "⏸ Trading paused. Send /resume when ready.",
+      "resumed": "▶️ Trading resumed.",
+      "buy_logged": "✅ Buy logged for alert #{id}. Phase 2 will execute this automatically.",
+      "skipped": "❌ Skipped alert #{id}.",
+      "alert_not_found": "Alert #{id} not found in database."
+    },
+    "alert": {
+      "price_label": "💰 Price:",
+      "liquidity_label": "💧 Liquidity:",
+      "volume_label": "📊 Vol 24h:",
+      "marketcap_label": "📈 Market Cap:",
+      "age_label": "⏱ Age:",
+      "score_label": "Security Score:",
+      "flags_label": "*Flags:*",
+      "btn_buy": "✅ BUY ${amount}",
+      "btn_skip": "❌ Skip"
+    },
+    "lang_picker": {
+      "prompt": "🌐 Choose your language:",
+      "english": "🇺🇸 English",
+      "portuguese": "🇧🇷 Português",
+      "spanish": "🇪🇸 Español",
+      "set_confirmation": "Language set to {lang}. All messages will now appear in {lang}."
+    }
+  },
+
+  "email": {
+    "welcome": {
+      "subject": "Your Breadbot license is ready",
+      "greeting": "Thanks for purchasing Breadbot.",
+      "body_1": "Your license key is active and your copy of the full source code is available at the link below.",
+      "deploy_heading": "Deploy in one click",
+      "deploy_body": "Click the button below to deploy Breadbot to Railway. The setup wizard will walk you through connecting your exchange API keys and Telegram bot in about five minutes.",
+      "btn_deploy": "Deploy Breadbot Now",
+      "support_heading": "Need help?",
+      "support_body": "Reply to this email or reach us at hello@breadbot.app. Response time is under 24 hours.",
+      "disclaimer": "This software is provided as-is. Crypto trading involves significant risk of loss. You are solely responsible for your trading decisions.",
+      "footer": "Breadbot · hello@breadbot.app · breadbot.app"
+    },
+    "renewal": {
+      "subject": "Your Breadbot annual renewal",
+      "body": "Your Breadbot annual renewal is due. Renewing keeps you current on new exchange connectors, strategy updates, and priority support."
+    }
+  }
+}
