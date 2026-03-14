@@ -1,0 +1,880 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Breadbot — Automated Crypto Trading Bot | 24/7 Meme Coin Scanner</title>
+<meta name="description" content="Automated crypto trading bot scanning Solana and Base for meme coins, monitoring stablecoin yields, and executing trades 24/7. One-time price.">
+<meta name="keywords" content="crypto trading bot, automated crypto trading, meme coin scanner, Solana trading bot, Base chain bot, stablecoin yield monitor">
+<meta name="robots" content="index, follow">
+<link rel="canonical" href="https://breadbot.app/">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://breadbot.app/">
+<meta property="og:title" content="Breadbot — Crypto Trading Bot Running 24/7">
+<meta property="og:description" content="Automated crypto trading bot scanning Solana and Base for meme coins, monitoring stablecoin yields, and executing trades 24/7. Full source code, one-time price.">
+<meta property="og:image" content="https://breadbot.app/og-image.png">
+<meta property="og:site_name" content="Breadbot">
+
+<!-- Twitter Card -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:site" content="@breadbotapp">
+<meta name="twitter:title" content="Breadbot — Crypto Trading Bot Running 24/7">
+<meta name="twitter:description" content="Automated crypto trading bot scanning Solana and Base for meme coins, monitoring stablecoin yields, and executing trades 24/7. Full source code, one-time price.">
+<meta name="twitter:image" content="https://breadbot.app/og-image.png">
+
+<!-- Structured Data: SoftwareApplication -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Breadbot",
+  "applicationCategory": "FinanceApplication",
+  "operatingSystem": "Web, Linux, macOS",
+  "description": "Automated crypto trading bot that scans Solana and Base for meme coin opportunities, monitors stablecoin yields, and executes trades in Manual or Auto mode.",
+  "offers": [
+    {
+      "@type": "Offer",
+      "name": "Personal",
+      "price": "997",
+      "priceCurrency": "USD",
+      "priceValidUntil": "2027-01-01",
+      "availability": "https://schema.org/InStock"
+    },
+    {
+      "@type": "Offer",
+      "name": "Professional",
+      "price": "2497",
+      "priceCurrency": "USD",
+      "priceValidUntil": "2027-01-01",
+      "availability": "https://schema.org/InStock"
+    }
+  ],
+  "aggregateRating": {
+    "@type": "AggregateRating",
+    "ratingValue": "4.8",
+    "reviewCount": "12"
+  }
+}
+</script>
+
+<!-- Structured Data: FAQPage -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "FAQPage",
+  "mainEntity": [
+    {
+      "@type": "Question",
+      "name": "Can Breadbot access or withdraw my funds?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Breadbot connects using read-and-trade-only API keys. It can see balances and place trades but cannot move funds anywhere. Withdraw and Transfer permissions are never requested during setup. Your exchange credentials remain on your own machine in an encrypted .env file that only you control."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Is it safe to let a bot trade for me?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "In many ways safer than manual trading. Breadbot follows your rules exactly — no panic selling, no FOMO buying. Every trade respects position size limits, and the daily loss circuit breaker pauses everything automatically if losses reach your threshold. You can override, pause, or stop with one click anytime."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What happens if the market crashes while my bot is running?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Breadbot has two automatic protection layers. Every position includes a stop-loss that exits if the token drops to your configured level. The daily loss limit pauses all trading if total losses hit your threshold, default 5% of portfolio. You receive an instant notification the moment either triggers."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Do I need trading experience to use Breadbot?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No. Start with the Balanced strategy preset which has sensible defaults for everything. The dashboard explains every metric in plain English with help icons. A guided walkthrough runs the first time you open the dashboard and covers every important section in about three minutes."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How long does setup take?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "About five minutes from purchase to first live scan. The setup wizard walks you through connecting exchange API keys and confirming risk settings. The bot confirms everything worked correctly the moment it goes live."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I try it without risking real money?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes. Paper trading mode runs the full scanner and shows alerts and decisions exactly as they would appear live, but no real trades are placed. Use paper mode to get comfortable with the dashboard and verify your strategy settings before switching to live trading."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What is the difference between Manual and Auto mode?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "In Manual mode, Breadbot finds qualifying tokens, runs security checks, and sends you an alert with Buy or Skip options. Nothing executes without your approval. In Auto mode, tokens passing your configured security score and market cap thresholds execute immediately. Daily loss limits work identically in both modes."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "What does the security score mean?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "A 100-point score summarizing automated rug pull checks on every new token. It starts at 100 and loses points for specific red flags: sell tax above 5%, pausable contracts, changeable balances, concentrated ownership. Tokens scoring below 50 never reach you. Each alert shows exactly which checks deducted points."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "How much do I need to invest?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "There is no minimum required by Breadbot. Default settings are designed for $1,000–$10,000 accounts with each trade capped at 2% of portfolio. On a $1,000 account that means $20 per trade. The bot works on any account size with proportional position scaling."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Will I definitely make money?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "No one can guarantee profits in crypto. Breadbot executes consistently, removes emotional decisions, and filters out most low-quality tokens automatically — but markets can move against any position. Start with paper trading and only invest money you can afford to lose. The 30-day money-back guarantee lets you evaluate risk-free."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Which exchanges are supported?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Coinbase Advanced Trade and Kraken for live trading. Solana and Base DEX pairs are monitored via DEXScreener for scanner alerts but executed through your connected CEX accounts. Yield monitoring covers Coinbase, Aave V3, Morpho, and Kraken. Additional exchange support is in development."
+      }
+    },
+    {
+      "@type": "Question",
+      "name": "Can I stop, pause, or change settings anytime?",
+      "acceptedAnswer": {
+        "@type": "Answer",
+        "text": "Yes to all three. Pause trading instantly from the Controls page — the bot stops immediately. Resume the same way with /resume. Change risk settings, strategy, and execution mode anytime from Controls, with changes taking effect on the next scan cycle. No lock-in periods."
+      }
+    }
+  ]
+}
+</script>
+
+<!-- Structured Data: Organization -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  "name": "Breadbot",
+  "url": "https://breadbot.app",
+  "logo": "https://breadbot.app/logo.png",
+  "contactPoint": {
+    "@type": "ContactPoint",
+    "email": "hello@breadbot.app",
+    "contactType": "customer support"
+  }
+}
+</script>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@300;400;500;600;700&family=Space+Grotesk:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#080808;--bg2:#0f0f0f;--bg3:#161616;--bg4:#1c1c1c;
+  --a:#f59e0b;--a2:#fbbf24;--alo:rgba(245,158,11,.08);--amed:rgba(245,158,11,.16);
+  --g:#22c55e;--r:#ef4444;--b:#3b82f6;
+  --t:#f0f0f0;--t2:#9a9a9a;--mu:#484848;
+  --brd:#202020;--brd2:#2c2c2c;
+  --mono:'IBM Plex Mono',monospace;
+  --disp:'Bebas Neue',cursive;
+  --body:'Space Grotesk',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--t);font-family:var(--body);overflow-x:hidden}
+/* scanline */
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent 0,transparent 3px,rgba(0,0,0,.025) 3px,rgba(0,0,0,.025) 4px);pointer-events:none;z-index:9000}
+::-webkit-scrollbar{width:4px}
+::-webkit-scrollbar-track{background:var(--bg)}
+::-webkit-scrollbar-thumb{background:var(--brd2)}
+::-webkit-scrollbar-thumb:hover{background:var(--a)}
+
+/* ── NAV ── */
+nav{position:fixed;top:0;left:0;right:0;z-index:500;display:flex;align-items:center;justify-content:space-between;padding:0 56px;height:64px;border-bottom:1px solid var(--brd);background:rgba(8,8,8,.9);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}
+.nav-logo{display:flex;align-items:center;gap:12px;text-decoration:none}
+.lm{width:36px;height:36px;display:flex;align-items:center;justify-content:center;position:relative;flex-shrink:0}
+.lm svg{overflow:visible}
+.lm svg line,.lm svg polyline{animation:hp 3s ease-in-out infinite}
+@keyframes hp{0%,100%{filter:drop-shadow(0 0 0px rgba(245,158,11,0))}50%{filter:drop-shadow(0 0 8px rgba(245,158,11,.5))}}
+.lt{font-family:var(--mono);font-size:12px;font-weight:600;letter-spacing:.22em;color:var(--t)}
+.nav-links{display:flex;align-items:center;gap:36px;list-style:none}
+.nav-links a{font-family:var(--mono);font-size:11px;letter-spacing:.14em;color:var(--t2);text-decoration:none;text-transform:uppercase;transition:color .15s}
+.nav-links a:hover{color:var(--t)}
+.nav-cta{background:var(--a)!important;color:#000!important;padding:9px 22px!important;font-weight:700!important;transition:background .15s!important}
+.nav-cta:hover{background:var(--a2)!important}
+
+/* ── HERO ── */
+.grid-bg{background-image:linear-gradient(var(--brd) 1px,transparent 1px),linear-gradient(90deg,var(--brd) 1px,transparent 1px);background-size:48px 48px}
+#hero{min-height:100vh;padding:120px 56px 80px;display:flex;align-items:center;position:relative;overflow:hidden}
+#hero::before{content:'';position:absolute;top:-160px;right:-100px;width:700px;height:700px;background:radial-gradient(ellipse,rgba(245,158,11,.07) 0%,transparent 68%);pointer-events:none}
+#hero::after{content:'';position:absolute;bottom:0;left:0;right:0;height:100px;background:linear-gradient(to bottom,transparent,var(--bg));pointer-events:none}
+.hero-in{max-width:1240px;margin:0 auto;width:100%;display:grid;grid-template-columns:1fr 1fr;gap:96px;align-items:center;position:relative;z-index:1}
+.eb{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:10px;letter-spacing:.3em;color:var(--a);text-transform:uppercase;margin-bottom:24px}
+.ed{width:6px;height:6px;border-radius:50%;background:var(--g);animation:pg 2s ease-in-out infinite}
+@keyframes pg{0%,100%{box-shadow:0 0 0 0 rgba(34,197,94,.5)}50%{box-shadow:0 0 0 5px rgba(34,197,94,0)}}
+h1{font-family:var(--disp);font-size:clamp(72px,9vw,108px);line-height:.92;letter-spacing:.015em;color:var(--t);margin-bottom:32px}
+h1 em{font-style:normal;color:var(--a);text-shadow:0 0 60px rgba(245,158,11,.18)}
+.hs{font-size:15px;line-height:1.75;color:var(--t2);max-width:460px;margin-bottom:44px;font-weight:300}
+.hc{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;text-decoration:none;cursor:pointer;transition:all .18s ease;white-space:nowrap;border:none}
+.btn-p{background:var(--a);color:#000;padding:15px 32px}
+.btn-p:hover{background:var(--a2);transform:translateY(-1px);box-shadow:0 8px 32px rgba(245,158,11,.22)}
+.btn-g{background:transparent;color:var(--t2);padding:14px 32px;border:1px solid var(--brd2)}
+.btn-g:hover{border-color:var(--a);color:var(--a)}
+.btn-o{background:transparent;color:var(--a);padding:14px 28px;border:1px solid rgba(245,158,11,.35)}
+.btn-o:hover{background:var(--alo);border-color:var(--a)}
+
+/* ── TERMINAL ── */
+.term{background:var(--bg2);border:1px solid var(--brd2);box-shadow:0 24px 64px rgba(0,0,0,.55),0 0 80px rgba(245,158,11,.03)}
+.tc{display:flex;align-items:center;gap:7px;padding:11px 16px;border-bottom:1px solid var(--brd);background:var(--bg3);user-select:none}
+.cd{width:11px;height:11px;border-radius:50%}
+.cr{background:#ff5f57}.cy{background:#febc2e}.cg{background:#28c840}
+.cl{margin-left:10px;font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--mu);text-transform:uppercase}
+.cs{margin-left:auto;display:flex;align-items:center;gap:6px;font-family:var(--mono);font-size:9px;letter-spacing:.12em;color:var(--g)}
+.csd{width:5px;height:5px;border-radius:50%;background:var(--g);animation:pg 2s ease-in-out infinite}
+.tb{padding:20px 22px;font-family:var(--mono);font-size:12px;line-height:1.85;min-height:360px;overflow:hidden}
+.tl{opacity:0;transform:translateY(3px);animation:li .25s ease forwards}
+@keyframes li{to{opacity:1;transform:none}}
+.tp{color:var(--a)}.tcm{color:var(--t)}.to{color:var(--t2)}.tok{color:var(--g)}.tdim{color:var(--mu)}
+.tk{color:var(--a);display:inline-block;min-width:62px}
+.cur{display:inline-block;width:8px;height:14px;background:var(--a);vertical-align:middle;margin-left:2px;animation:bl 1s step-end infinite}
+@keyframes bl{0%,100%{opacity:1}50%{opacity:0}}
+
+/* ── TICKER ── */
+.ticker{border-top:1px solid var(--brd);border-bottom:1px solid var(--brd);background:var(--bg2);padding:9px 0;overflow:hidden}
+.tr{display:flex;width:max-content;animation:ts 35s linear infinite}
+.tr:hover{animation-play-state:paused}
+@keyframes ts{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.ti{display:inline-flex;align-items:center;gap:10px;padding:0 28px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;border-right:1px solid var(--brd)}
+.tn{color:var(--t2)}.tv{color:var(--a);font-weight:600}.tup{color:var(--g);font-size:9px}.tdn{color:var(--r);font-size:9px}
+
+/* ── STATS BAND ── */
+.sb{display:grid;grid-template-columns:repeat(4,1fr);border-bottom:1px solid var(--brd)}
+.sk{padding:44px 52px;border-right:1px solid var(--brd);position:relative;overflow:hidden}
+.sk:last-child{border-right:none}
+.sk::before{content:'+';position:absolute;bottom:10px;right:14px;font-family:var(--mono);font-size:30px;color:var(--brd2);line-height:1}
+.sn{font-family:var(--disp);font-size:58px;line-height:1;color:var(--a);margin-bottom:10px}
+.sl{font-family:var(--mono);font-size:9px;letter-spacing:.22em;color:var(--mu);text-transform:uppercase}
+
+/* ── LAYOUT ── */
+.wrap{max-width:1240px;margin:0 auto;padding:0 56px}
+.sec{padding:108px 0}
+.ey{display:inline-flex;align-items:center;gap:12px;font-family:var(--mono);font-size:9px;letter-spacing:.32em;color:var(--a);text-transform:uppercase;margin-bottom:18px}
+.ey::before{content:'';width:28px;height:1px;background:var(--a)}
+h2{font-family:var(--disp);font-size:clamp(44px,5.5vw,66px);line-height:.97;color:var(--t);margin-bottom:22px}
+.ss{font-size:15px;line-height:1.78;color:var(--t2);max-width:560px;font-weight:300}
+
+/* ── FEATURES ── */
+.fg{margin-top:64px;display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--brd);border:1px solid var(--brd)}
+.ft{background:var(--bg);padding:52px 44px;position:relative;overflow:hidden;transition:background .22s}
+.ft:hover{background:var(--bg2)}
+.ft::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,var(--a),transparent);transform:scaleX(0);transition:transform .4s ease}
+.ft:hover::before{transform:scaleX(1)}
+.fbn{position:absolute;bottom:-8px;right:18px;font-family:var(--disp);font-size:120px;line-height:1;color:var(--brd2);pointer-events:none;transition:color .3s}
+.ft:hover .fbn{color:var(--brd)}
+.fi{width:44px;height:44px;border:1px solid var(--brd2);display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:28px;background:var(--bg3);position:relative;z-index:1}
+.ftt{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.18em;text-transform:uppercase;color:var(--t);margin-bottom:18px;position:relative;z-index:1}
+.fd{font-size:13.5px;line-height:1.8;color:var(--t2);margin-bottom:28px;font-weight:300;position:relative;z-index:1}
+.ftgs{display:flex;flex-wrap:wrap;gap:6px;position:relative;z-index:1}
+.tag{font-family:var(--mono);font-size:9px;letter-spacing:.12em;padding:4px 9px;border:1px solid rgba(245,158,11,.25);color:var(--a);background:var(--alo)}
+
+/* ── PREVIEW ── */
+#preview{background:var(--bg2);border-top:1px solid var(--brd);border-bottom:1px solid var(--brd)}
+.pg{display:grid;grid-template-columns:360px 1fr;gap:96px;align-items:center}
+.pl{list-style:none;display:flex;flex-direction:column;gap:10px;margin:24px 0 36px}
+.pl li{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--t2)}
+.pl li::before{content:'→';color:var(--a)}
+.brow{border:1px solid var(--brd2);background:var(--bg3);box-shadow:0 32px 80px rgba(0,0,0,.65)}
+.bbar{display:flex;align-items:center;gap:7px;padding:10px 16px;border-bottom:1px solid var(--brd);background:var(--bg4)}
+.bd{width:10px;height:10px;border-radius:50%}
+.br{background:#ff5f57}.by{background:#febc2e}.bg{background:#28c840}
+.burl{flex:1;margin-left:8px;padding:4px 12px;background:var(--bg2);border:1px solid var(--brd);font-family:var(--mono);font-size:9px;letter-spacing:.06em;color:var(--mu)}
+.dsim{display:grid;grid-template-columns:110px 1fr;min-height:340px}
+.dsd{background:var(--bg2);border-right:1px solid var(--brd);padding:14px 0;font-family:var(--mono);font-size:9px}
+.dni{padding:8px 12px;color:var(--mu);letter-spacing:.1em;border-left:2px solid transparent;text-transform:uppercase}
+.dni.on{color:var(--a);border-left-color:var(--a);background:var(--alo)}
+.dm{background:var(--bg);padding:14px}
+.dsr{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--brd);border:1px solid var(--brd);margin-bottom:10px}
+.ds{background:var(--bg2);padding:9px 11px}
+.dsl{font-family:var(--mono);font-size:7px;letter-spacing:.14em;color:var(--mu);text-transform:uppercase;margin-bottom:4px}
+.dsv{font-family:var(--disp);font-size:18px;color:var(--a)}
+.dth{display:grid;grid-template-columns:2fr 1fr 1fr;padding:5px 9px;background:var(--bg3);border:1px solid var(--brd);border-bottom:none;font-family:var(--mono);font-size:7px;letter-spacing:.1em;color:var(--mu);text-transform:uppercase}
+.dtr{display:grid;grid-template-columns:2fr 1fr 1fr;padding:6px 9px;border:1px solid var(--brd);border-top:none;font-family:var(--mono);font-size:9px;color:var(--t2)}
+.dtr:nth-child(odd){background:var(--bg2)}
+.cg2{color:var(--g)}.ca{color:var(--a)}.cr2{color:var(--r)}.cm{color:var(--mu)}
+
+/* ── HOW IT WORKS ── */
+.fl{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--brd);border:1px solid var(--brd);margin-top:64px}
+.fs{background:var(--bg);padding:44px 36px;position:relative}
+.fs:not(:last-child)::after{content:'→';position:absolute;top:44px;right:-11px;font-family:var(--mono);font-size:14px;color:var(--a);z-index:2;background:var(--bg);padding:0 2px}
+.fn{font-family:var(--disp);font-size:64px;line-height:1;color:var(--brd2);margin-bottom:20px}
+.fst{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--t);margin-bottom:14px}
+.fsd{font-size:12.5px;line-height:1.8;color:var(--t2);font-weight:300}
+.fc{color:var(--a);font-family:var(--mono);font-size:11px}
+
+/* ── PRICING ── */
+#pricing{background:var(--bg2);border-top:1px solid var(--brd)}
+.prg{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--brd);border:1px solid var(--brd);margin-top:64px}
+.plan{background:var(--bg2);padding:52px 44px;position:relative;transition:transform .3s ease,box-shadow .3s ease}
+.plan.feat{background:var(--bg3);border:2px solid var(--a);margin:-1px;z-index:2}
+.pb{position:absolute;top:0;left:50%;transform:translate(-50%,-50%);background:var(--a);color:#000;font-family:var(--mono);font-size:9px;font-weight:700;letter-spacing:.2em;padding:5px 16px;text-transform:uppercase;white-space:nowrap}
+.pn{font-family:var(--mono);font-size:9px;letter-spacing:.3em;color:var(--mu);text-transform:uppercase;margin-bottom:24px}
+.pp{font-family:var(--disp);font-size:64px;line-height:1;color:var(--t);margin-bottom:6px}
+.pp sup{font-family:var(--mono);font-size:22px;vertical-align:super;color:var(--t2);font-weight:300}
+.pc{font-family:var(--mono);font-size:10px;letter-spacing:.12em;color:var(--mu);margin-bottom:36px}
+.pdiv{height:1px;background:var(--brd);margin-bottom:36px}
+.pf{list-style:none;display:flex;flex-direction:column;gap:14px;margin-bottom:44px}
+.pf li{display:flex;align-items:flex-start;gap:10px;font-size:13px;color:var(--t2);font-weight:300;line-height:1.5}
+.pf li::before{content:'→';font-family:var(--mono);color:var(--a);flex-shrink:0;margin-top:1px}
+.pf li.off{opacity:.32}
+.pf li.off::before{content:'—';color:var(--mu)}
+.bpl{display:block;width:100%;padding:15px;text-align:center;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.18em;text-transform:uppercase;text-decoration:none;border:1px solid var(--brd2);color:var(--t);background:transparent;cursor:pointer;transition:all .18s}
+.plan.feat .bpl{background:var(--a);border-color:var(--a);color:#000}
+.bpl:hover{border-color:var(--a);color:var(--a)}
+.plan.feat .bpl:hover{background:var(--a2);border-color:var(--a2);color:#000}
+.rb{margin-top:28px;padding:20px 28px;border:1px solid var(--brd);background:var(--bg);display:flex;align-items:flex-start;gap:16px;font-size:12.5px;color:var(--t2);font-weight:300;line-height:1.7}
+.ri{font-family:var(--mono);font-size:18px;color:var(--a);flex-shrink:0;margin-top:1px}
+
+/* ── FAQ ── */
+.fql{margin-top:56px;border:1px solid var(--brd);background:var(--brd);display:flex;flex-direction:column;gap:1px}
+.fqi{background:var(--bg2)}
+.fqq{width:100%;display:flex;align-items:center;justify-content:space-between;padding:26px 36px;background:none;border:none;color:var(--t);font-family:var(--body);font-size:14px;font-weight:500;text-align:left;cursor:pointer;transition:color .15s;gap:20px}
+.fqq:hover{color:var(--a)}
+.fqc{font-family:var(--mono);font-size:16px;color:var(--a);flex-shrink:0;transition:transform .3s ease}
+.fqi.open .fqc{transform:rotate(180deg)}
+.fqa{max-height:0;overflow:hidden;transition:max-height .38s ease}
+.fqi.open .fqa{max-height:220px}
+.fqai{padding:0 36px 28px;font-size:13.5px;line-height:1.9;color:var(--t2);font-weight:300}
+
+/* ── FOOTER ── */
+footer{border-top:1px solid var(--brd)}
+.fi2{max-width:1240px;margin:0 auto;padding:56px 56px 48px}
+.ft2{display:flex;align-items:center;justify-content:space-between;margin-bottom:40px;padding-bottom:40px;border-bottom:1px solid var(--brd)}
+.fls{display:flex;gap:32px}
+.fls a{font-family:var(--mono);font-size:10px;letter-spacing:.14em;color:var(--mu);text-decoration:none;text-transform:uppercase;transition:color .15s}
+.fls a:hover{color:var(--a)}
+.fcp{font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--mu);margin-bottom:12px}
+.fds{font-size:11px;color:var(--mu);line-height:1.9;font-weight:300;max-width:680px}
+
+/* ── REVEAL ── */
+.rev{opacity:0;transform:translateY(20px);transition:opacity .65s ease,transform .65s ease}
+.rev.in{opacity:1;transform:none}
+.d1{transition-delay:.08s}.d2{transition-delay:.17s}.d3{transition-delay:.26s}.d4{transition-delay:.35s}
+
+/* ── TRUST BAR ── */
+.trust-bar{display:flex;gap:24px;justify-content:center;padding:16px 0;font-size:13px;color:var(--t2)}
+.trust-item{display:flex;align-items:center;gap:8px}
+
+/* ── AUTO MODE FEATURE CARD ── */
+.ft.auto-mode{border-left:3px solid var(--a)}
+
+/* ── AUTO STEPS (3-col) ── */
+.auto-steps{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--brd);border:1px solid var(--brd);margin-top:64px}
+.auto-step{background:var(--bg);padding:44px 36px;position:relative}
+.auto-step-num{width:28px;height:28px;border-radius:50%;background:var(--a);color:#000;font-family:var(--mono);font-weight:700;font-size:13px;display:flex;align-items:center;justify-content:center;margin-bottom:20px}
+.auto-step-title{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--t);margin-bottom:14px}
+.auto-step-desc{font-size:12.5px;line-height:1.8;color:var(--t2);font-weight:300}
+
+/* ── FAQ SECTION (new) ── */
+.faq-section{max-width:760px;margin:56px auto 0;border:1px solid var(--brd);background:var(--brd);display:flex;flex-direction:column;gap:1px}
+.faq-item{background:var(--bg2)}
+.faq-question{width:100%;display:flex;align-items:center;justify-content:space-between;padding:26px 36px;background:none;border:none;color:var(--t);font-family:var(--body);font-size:14px;font-weight:500;text-align:left;cursor:pointer;transition:color .15s;gap:20px}
+.faq-question:hover{color:var(--a)}
+.faq-chevron{font-family:var(--mono);font-size:16px;color:var(--a);flex-shrink:0;transition:transform .3s ease}
+.faq-item.open .faq-chevron{transform:rotate(180deg)}
+.faq-answer{max-height:0;overflow:hidden;transition:max-height .38s ease}
+.faq-item.open .faq-answer{max-height:300px}
+.faq-answer p{padding:0 36px 28px;font-size:13.5px;line-height:1.9;color:var(--t2);font-weight:300}
+
+/* ── TRUST BADGES SECTION ── */
+.trust-badges-section{padding:0}
+.trust-badges{display:flex;flex-wrap:wrap;gap:20px;justify-content:center;padding:32px 0}
+.trust-badge{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--mu)}
+
+/* ── RESPONSIVE ── */
+@media(max-width:960px){
+  nav{padding:0 24px}
+  .nav-links{display:none}
+  #hero{padding:100px 24px 72px}
+  .hero-in{grid-template-columns:1fr;gap:56px}
+  .wrap{padding:0 24px}
+  .sec{padding:72px 0}
+  .sb{grid-template-columns:repeat(2,1fr)}
+  .sk{padding:32px 28px}
+  .fg{grid-template-columns:1fr}
+  .ft{padding:40px 32px}
+  .pg{grid-template-columns:1fr;gap:48px}
+  .fl{grid-template-columns:repeat(2,1fr)}
+  .fs:not(:last-child)::after{display:none}
+  .prg{grid-template-columns:1fr}
+  .plan.feat{margin:0}
+  .fi2{padding:48px 24px 40px}
+  .ft2{flex-direction:column;align-items:flex-start;gap:28px}
+  .trust-bar{flex-direction:column;align-items:flex-start;gap:12px}
+  .auto-steps{grid-template-columns:1fr}
+  .faq-question{padding:20px 24px;font-size:13px}
+  .faq-answer p{padding:0 24px 20px}
+  .trust-badges{flex-direction:column;align-items:center;gap:12px}
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav>
+  <a href="#" class="nav-logo">
+    <div class="lm"><svg width="36" height="36" viewBox="0 0 32 36" fill="none"><line x1="8" y1="5" x2="8" y2="31" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/><polyline points="8,5 18,5 24,9 24,14 16,18 8,18" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="8,18 17,18 25,22 25,27 17,31 8,31" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+    <span class="lt">BREADBOT</span>
+  </a>
+  <ul class="nav-links">
+    <li><a href="#features">Features</a></li>
+    <li><a href="#how">How It Works</a></li>
+    <li><a href="#pricing">Pricing</a></li>
+    <li><a href="#faq">FAQ</a></li>
+    <li><a href="https://demo.breadbot.app" target="_blank">Live Demo</a></li>
+    <li><a href="#pricing" class="nav-cta">Buy Now</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section id="hero" class="grid-bg">
+  <div class="hero-in">
+    <div>
+      <div class="eb"><span class="ed"></span>Live on Base Mainnet</div>
+      <h1>Your Crypto Bot.<br><em>Running 24/7.</em></h1>
+      <p class="hs">Breadbot scans Solana and Base for high-scoring meme coin opportunities, monitors stablecoin yields across six platforms, and executes flash loan arbs &mdash; all from a browser dashboard you control from your phone. Run it in Manual mode and approve each trade, or switch to Auto and let your strategy execute while you sleep. Change modes anytime from your phone.</p>
+      <div class="hc">
+        <a href="https://demo.breadbot.app" target="_blank" class="btn btn-p">View Live Demo &#8599;</a>
+        <a href="#pricing" class="btn btn-g">See Pricing &rarr;</a>
+      </div>
+      <div class="trust-bar">
+        <span class="trust-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Your funds never leave Coinbase or Kraken — trade-only API access</span>
+        <span class="trust-item"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg> 30-day money-back guarantee — no questions asked</span>
+      </div>
+    </div>
+    <div class="term">
+      <div class="tc">
+        <span class="cd cr"></span><span class="cd cy"></span><span class="cd cg"></span>
+        <span class="cl">breadbot &mdash; scanner</span>
+        <span class="cs"><span class="csd"></span>RUNNING</span>
+      </div>
+      <div class="tb" id="tbd"></div>
+    </div>
+  </div>
+</section>
+
+<!-- TICKER -->
+<div class="ticker"><div class="tr" id="tr"></div></div>
+
+<!-- STATS -->
+<div class="sb">
+  <div class="sk rev"><div class="sn" data-n="5" data-s=" MIN">0</div><div class="sl">Scan Interval</div></div>
+  <div class="sk rev d1"><div class="sn" data-n="6">0</div><div class="sl">Yield Platforms</div></div>
+  <div class="sk rev d2"><div class="sn" data-n="22">0</div><div class="sl">API Endpoints</div></div>
+  <div class="sk rev d3"><div class="sn">$0</div><div class="sl">Capital At Risk Per Arb</div></div>
+</div>
+
+<!-- FEATURES -->
+<div id="features">
+  <div class="wrap sec">
+    <div class="ey rev">What It Does</div>
+    <h2 class="rev">Three bots.<br>One dashboard.</h2>
+    <p class="ss rev">Every system runs simultaneously and writes to a single SQLite database. Every alert, trade decision, yield reading, and arb attempt &mdash; permanently logged.</p>
+    <div class="fg">
+      <div class="ft rev">
+        <div class="fbn">01</div>
+        <div class="fi">&#x2B21;</div>
+        <div class="ftt">Meme Coin Scanner</div>
+        <p class="fd">Polls DEXScreener every five minutes across Solana and Base. Every candidate passes through GoPlus and RugCheck before an alert reaches your phone. Honeypots, blacklist functions, and suspicious ownership patterns are filtered before you ever see them.</p>
+        <div class="ftgs"><span class="tag">DEXScreener</span><span class="tag">GoPlus</span><span class="tag">RugCheck</span><span class="tag">Telegram</span><span class="tag">Solana + Base</span></div>
+      </div>
+      <div class="ft rev d1">
+        <div class="fbn">02</div>
+        <div class="fi">&#x25C8;</div>
+        <div class="ftt">Yield Monitor</div>
+        <p class="fd">Checks APY across Coinbase, Aave V3, Coinbase Morpho, and Kraken every hour. Saves every reading to a local database and alerts you when any rate moves more than 0.5%. Builds a yield history you can chart and reference when allocating capital.</p>
+        <div class="ftgs"><span class="tag">Coinbase</span><span class="tag">Aave V3</span><span class="tag">Morpho</span><span class="tag">Kraken</span><span class="tag">Hourly</span></div>
+      </div>
+      <div class="ft rev d2">
+        <div class="fbn">03</div>
+        <div class="fi">&#x26F6;</div>
+        <div class="ftt">Flash Loan Arb</div>
+        <p class="fd">Borrows USDC from Aave V3, swaps to WETH on Uniswap V3, swaps back on Aerodrome, repays Aave, and keeps the spread &mdash; all in one transaction. If the minimum profit threshold is not met, the entire transaction reverts. No capital at risk on failed arbs.</p>
+        <div class="ftgs"><span class="tag">Base Mainnet</span><span class="tag">Aave V3</span><span class="tag">Uniswap V3</span><span class="tag">Aerodrome</span><span class="tag">Deployed</span></div>
+      </div>
+      <div class="ft rev d3 auto-mode">
+        <div class="fbn">04</div>
+        <div class="fi"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="5" width="22" height="14" rx="7" ry="7"/><circle cx="16" cy="12" r="3"/></svg></div>
+        <div class="ftt">Manual or Auto — You Decide</div>
+        <p class="fd">Approve every trade yourself, or set a strategy and let Breadbot execute automatically. Conservative, Balanced, and Aggressive presets control exactly which tokens qualify. Your daily loss limit acts as an automatic circuit breaker no matter which mode you choose.</p>
+        <div class="ftgs"><span class="tag">Manual Mode</span><span class="tag">Auto Mode</span><span class="tag">3 Presets</span><span class="tag">Loss Limit</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- DASHBOARD PREVIEW -->
+<section id="preview">
+  <div class="wrap sec">
+    <div class="pg">
+      <div>
+        <div class="ey rev">The Dashboard</div>
+        <h2 class="rev">9 pages.<br>No terminal<br>required.</h2>
+        <p class="ss rev" style="margin-bottom:0">Run it on your Mac, a VPS, or anywhere Python runs. Every number updates live from the same database the bot writes to.</p>
+        <ul class="pl rev">
+          <li>Overview, Positions, Alert Feed</li>
+          <li>Yields, Trade Log, Flash Loans</li>
+          <li>Analytics, Research, Controls</li>
+          <li>22 API endpoints, keyboard shortcuts</li>
+          <li>Pause, resume, edit risk params from the browser</li>
+        </ul>
+        <a href="https://demo.breadbot.app" target="_blank" class="btn btn-o rev">Open Live Demo &#8599;</a>
+      </div>
+      <div class="brow rev d1">
+        <div class="bbar">
+          <span class="bd br"></span><span class="bd by"></span><span class="bd bg"></span>
+          <span class="burl">demo.breadbot.app</span>
+        </div>
+        <div class="dsim">
+          <div class="dsd">
+            <div class="dni on">&#9632; Overview</div>
+            <div class="dni">&#9675; Positions</div>
+            <div class="dni">&#9675; Alerts</div>
+            <div class="dni">&#9675; Yields</div>
+            <div class="dni">&#9675; Trades</div>
+            <div class="dni">&#9675; Flash</div>
+            <div class="dni">&#9675; Analytics</div>
+            <div class="dni">&#9675; Research</div>
+            <div class="dni">&#9675; Controls</div>
+          </div>
+          <div class="dm">
+            <div class="dsr">
+              <div class="ds"><div class="dsl">Status</div><div class="dsv" style="font-size:11px;font-family:var(--mono);color:var(--g)">&#9679; ACTIVE</div></div>
+              <div class="ds"><div class="dsl">Today P&amp;L</div><div class="dsv">+$284</div></div>
+              <div class="ds"><div class="dsl">Open Pos.</div><div class="dsv">3</div></div>
+            </div>
+            <div class="dth"><span>Token</span><span>Score</span><span>Decision</span></div>
+            <div class="dtr"><span>PEPE2 <span class="cm" style="font-size:7px">BASE</span></span><span class="cg2">92</span><span class="cg2">BUY</span></div>
+            <div class="dtr"><span>WOJAK <span class="cm" style="font-size:7px">SOL</span></span><span class="ca">74</span><span class="cm">SKIP</span></div>
+            <div class="dtr"><span>DEGEN <span class="cm" style="font-size:7px">BASE</span></span><span class="cg2">88</span><span class="cg2">BUY</span></div>
+            <div class="dtr"><span>MOCHI <span class="cm" style="font-size:7px">SOL</span></span><span class="cr2">41</span><span class="cm">SKIP</span></div>
+            <div class="dtr"><span>BASED <span class="cm" style="font-size:7px">BASE</span></span><span class="cg2">95</span><span class="cg2">BUY</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- HOW IT WORKS -->
+<div id="how">
+  <div class="wrap sec">
+    <div class="ey rev">How It Works</div>
+    <h2 class="rev">Up and running<br>in under 10 minutes.</h2>
+    <p class="ss rev">No terminal. No config files. Click Deploy, fill a form, and your bot is live.</p>
+    <div class="fl">
+      <div class="fs rev"><div class="fn">01</div><div class="fst">Buy</div><p class="fsd">Complete your purchase. Your license key and a one-click deploy link arrive in your inbox immediately.</p></div>
+      <div class="fs rev d1"><div class="fn">02</div><div class="fst">Deploy</div><p class="fsd">Click the deploy link. Create a free hosting account using your Google login &mdash; takes about 90 seconds.</p></div>
+      <div class="fs rev d2"><div class="fn">03</div><div class="fst">Connect</div><p class="fsd">Fill in your exchange API keys and license key in a simple web form. Optional: connect a phone for trade alerts. No terminal, no config files.</p></div>
+      <div class="fs rev d3"><div class="fn">04</div><div class="fst">Control</div><p class="fsd">Your bot is live. Approve trades, check yields, pause or adjust risk settings anytime from your browser dashboard or your phone.</p></div>
+    </div>
+  </div>
+</div>
+
+<!-- AUTO MODE EXPLAINER -->
+<div id="auto-mode" style="border-top:1px solid var(--brd)">
+  <div class="wrap sec">
+    <div class="ey rev">Auto Mode</div>
+    <h2 class="rev">Set your rules.<br>The bot follows them.</h2>
+    <p class="ss rev">Three steps between your strategy and fully automatic execution. Every trade still respects your daily loss limit and stop-loss settings.</p>
+    <div class="auto-steps">
+      <div class="auto-step rev">
+        <div class="auto-step-num">1</div>
+        <div class="auto-step-title">Set your strategy</div>
+        <p class="auto-step-desc">Choose Conservative, Balanced, or Aggressive. Each preset defines the minimum security score and market cap range a token must hit before the bot executes automatically.</p>
+      </div>
+      <div class="auto-step rev d1">
+        <div class="auto-step-num">2</div>
+        <div class="auto-step-title">Let the scanner run</div>
+        <p class="auto-step-desc">Breadbot polls DEXScreener every 5 minutes. Each new token is scored against 15 automated security checks. Only tokens that pass your preset thresholds are executed — everything else is ignored or sent for manual review.</p>
+      </div>
+      <div class="auto-step rev d2">
+        <div class="auto-step-num">3</div>
+        <div class="auto-step-title">Get notified</div>
+        <p class="auto-step-desc">Every auto-executed trade sends an instant notification: token name, entry price, amount, and your updated position count. Your configured stop-loss is set at the same moment.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PRICING -->
+<section id="pricing">
+  <div class="wrap sec">
+    <div class="ey rev">Pricing</div>
+    <h2 class="rev">One-time.<br>Yours to own.</h2>
+    <p class="ss rev">Full source code. No subscriptions, no usage limits. Deploy anywhere and run it as long as you want.</p>
+    <div class="prg">
+      <div class="plan rev">
+        <div class="pn">Personal</div>
+        <div class="pp"><sup>$</sup>997</div>
+        <div class="pc">one-time &middot; 12 months hosting included</div>
+        <div class="pdiv"></div>
+        <ul class="pf">
+          <li>Full source code</li>
+          <li>Setup guide (PDF)</li>
+          <li>30 days email support</li>
+          <li>Single machine license</li>
+          <li>Auto-execution with Conservative / Balanced / Aggressive strategy presets</li>
+          <li>30-day money-back guarantee</li>
+          <li class="off">VPS deploy guide</li>
+          <li class="off">Multi-machine license</li>
+        </ul>
+        <a href="https://bread-bot.lemonsqueezy.com/checkout/buy/774e8583-eeb6-4e55-9633-5ceb7bb81393" class="bpl">Buy Personal &rarr;</a>
+      </div>
+      <div class="plan feat rev d1">
+        <div class="pb">Most Popular</div>
+        <div class="pn">Professional</div>
+        <div class="pp"><sup>$</sup>2,497</div>
+        <div class="pc">one-time &middot; 24 months hosting included</div>
+        <div class="pdiv"></div>
+        <ul class="pf">
+          <li>Full source code</li>
+          <li>Setup guide (PDF)</li>
+          <li>90 days email support</li>
+          <li>3 machine license</li>
+          <li>VPS deploy guide included</li>
+          <li>Priority response</li>
+          <li>Auto-execution with Conservative / Balanced / Aggressive strategy presets</li>
+          <li>30-day money-back guarantee</li>
+        </ul>
+        <a href="https://bread-bot.lemonsqueezy.com/checkout/buy/1228e8d2-2da2-4fe1-b74f-a96a9e8c0f01" class="bpl">Buy Professional &rarr;</a>
+      </div>
+      <div class="plan rev d2">
+        <div class="pn">Custom</div>
+        <div class="pp" style="font-size:42px;padding-top:6px">Contact</div>
+        <div class="pc">white-label &middot; custom build</div>
+        <div class="pdiv"></div>
+        <ul class="pf">
+          <li>White-label rights</li>
+          <li>Custom feature development</li>
+          <li>Priority support</li>
+          <li>Unlimited machines</li>
+          <li>Co-development available</li>
+          <li>NDA available</li>
+          <li>Auto-execution with Conservative / Balanced / Aggressive strategy presets</li>
+          <li>30-day money-back guarantee</li>
+        </ul>
+        <a href="mailto:hello@breadbot.app" class="bpl">Get in Touch &rarr;</a>
+      </div>
+    </div>
+    <div class="rb rev">
+      <span class="ri">&#8635;</span>
+      <span>Optional annual renewal — <strong style="color:var(--t)">$97/yr</strong> (Personal) or <strong style="color:var(--t)">$197/yr</strong> (Professional) — keeps you current on updates, new exchange connectors, and ongoing support. Never required to keep running what you already have.</span>
+    </div>
+  </div>
+</section>
+
+<!-- FAQ -->
+<div id="faq" style="border-top:1px solid var(--brd)">
+  <div class="wrap sec">
+    <div class="ey rev">FAQ</div>
+    <h2 class="rev">Common questions.</h2>
+    <div class="faq-section rev">
+      <div class="faq-item">
+        <div class="faq-question"><span>Can Breadbot access or withdraw my funds?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>No. Breadbot connects using read-and-trade-only API keys. It can see balances and place trades but cannot move funds anywhere. Withdraw and Transfer permissions are never requested during setup. Your exchange credentials remain on your own machine in an encrypted .env file that only you control.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>Is it safe to let a bot trade for me?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>In many ways safer than manual trading. Breadbot follows your rules exactly — no panic selling, no FOMO buying. Every trade respects position size limits, and the daily loss circuit breaker pauses everything automatically if losses reach your threshold. You can override, pause, or stop with one click anytime.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>What happens if the market crashes while my bot is running?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>Breadbot has two automatic protection layers. Every position includes a stop-loss that exits if the token drops to your configured level. The daily loss limit pauses all trading if total losses hit your threshold, default 5% of portfolio. You receive an instant notification the moment either triggers.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>Do I need trading experience to use Breadbot?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>No. Start with the Balanced strategy preset which has sensible defaults for everything. The dashboard explains every metric in plain English with help icons. A guided walkthrough runs the first time you open the dashboard and covers every important section in about three minutes.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>How long does setup take?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>About five minutes from purchase to first live scan. The setup wizard walks you through connecting exchange API keys and confirming risk settings. The bot confirms everything worked correctly the moment it goes live.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>Can I try it without risking real money?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>Yes. Paper trading mode runs the full scanner and shows alerts and decisions exactly as they would appear live, but no real trades are placed. Use paper mode to get comfortable with the dashboard and verify your strategy settings before switching to live trading.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>What is the difference between Manual and Auto mode?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>In Manual mode, Breadbot finds qualifying tokens, runs security checks, and sends you an alert with Buy or Skip options. Nothing executes without your approval. In Auto mode, tokens passing your configured security score and market cap thresholds execute immediately. Daily loss limits work identically in both modes.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>What does the security score mean?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>A 100-point score summarizing automated rug pull checks on every new token. It starts at 100 and loses points for specific red flags: sell tax above 5%, pausable contracts, changeable balances, concentrated ownership. Tokens scoring below 50 never reach you. Each alert shows exactly which checks deducted points.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>How much do I need to invest?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>There is no minimum required by Breadbot. Default settings are designed for $1,000–$10,000 accounts with each trade capped at 2% of portfolio. On a $1,000 account that means $20 per trade. The bot works on any account size with proportional position scaling.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>Will I definitely make money?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>No one can guarantee profits in crypto. Breadbot executes consistently, removes emotional decisions, and filters out most low-quality tokens automatically — but markets can move against any position. Start with paper trading and only invest money you can afford to lose. The 30-day money-back guarantee lets you evaluate risk-free.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>Which exchanges are supported?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>Coinbase Advanced Trade and Kraken for live trading. Solana and Base DEX pairs are monitored via DEXScreener for scanner alerts but executed through your connected CEX accounts. Yield monitoring covers Coinbase, Aave V3, Morpho, and Kraken. Additional exchange support is in development.</p></div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-question"><span>Can I stop, pause, or change settings anytime?</span><span class="faq-chevron">&#8595;</span></div>
+        <div class="faq-answer"><p>Yes to all three. Pause trading instantly from the Controls page — the bot stops immediately. Resume the same way. Change risk settings, strategy, and execution mode anytime from Controls, with changes taking effect on the next scan cycle. No lock-in periods.</p></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TRUST BADGES -->
+<div class="trust-badges-section" style="border-top:1px solid var(--brd)">
+  <div class="wrap">
+    <div class="trust-badges">
+      <span class="trust-badge"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Trade-only API — withdrawals impossible</span>
+      <span class="trust-badge"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Stop-loss on every position</span>
+      <span class="trust-badge"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Pause instantly from your dashboard</span>
+      <span class="trust-badge"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> 30-day money-back guarantee</span>
+    </div>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <div class="fi2">
+    <div class="ft2">
+      <a href="#" class="nav-logo"><div class="lm"><svg width="36" height="36" viewBox="0 0 32 36" fill="none"><line x1="8" y1="5" x2="8" y2="31" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round"/><polyline points="8,5 18,5 24,9 24,14 16,18 8,18" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><polyline points="8,18 17,18 25,22 25,27 17,31 8,31" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><span class="lt">BREADBOT</span></a>
+      <div class="fls">
+        <a href="https://demo.breadbot.app" target="_blank">Demo</a>
+        <a href="#">Docs</a>
+        <a href="mailto:hello@breadbot.app">Support</a>
+        <a href="#pricing">Pricing</a>
+      </div>
+    </div>
+    <div class="fcp">Breadbot &copy; 2026</div>
+    <p class="fds">Crypto trading involves significant risk of loss. This software is provided as-is without warranty of any kind. Past performance does not indicate future results. You are solely responsible for your trading decisions and any resulting gains or losses.</p>
+  </div>
+</footer>
+
+<script>
+// ── Terminal ──────────────────────────────────────────────────────────
+const SC=[
+  {d:0,   h:'<span class="tp">breadbot $</span> <span class="tcm">scanner --chain base solana</span>'},
+  {d:700, h:'<span class="tdim">Initializing DEXScreener poller...</span>'},
+  {d:1100,h:'<span class="tok">&#10003; Connected &nbsp;polling every 300s</span>'},
+  {d:1700,h:'<span class="tdim">&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;</span>'},
+  {d:2100,h:'<span class="tdim">New pair detected on Base</span>'},
+  {d:2400,h:'<span class="tk">TOKEN </span><span class="to">PEPE2 / USDC</span>'},
+  {d:2600,h:'<span class="tk">LIQ &nbsp; </span><span class="to">$284,000</span>'},
+  {d:2800,h:'<span class="tk">VOL24H</span><span class="to">$1,240,000</span>'},
+  {d:3000,h:'<span class="tk">AGE &nbsp; </span><span class="to">4.2 hrs</span>'},
+  {d:3300,h:'<span class="tdim">&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;</span>'},
+  {d:3700,h:'<span class="tdim">Running GoPlus security check...</span>'},
+  {d:4200,h:'<span class="tok">&#10003; No honeypot detected</span>'},
+  {d:4500,h:'<span class="tok">&#10003; Liquidity locked 180 days</span>'},
+  {d:4800,h:'<span class="tok">&#10003; Contract renounced</span>'},
+  {d:5100,h:'<span class="tok">&#10003; Sell tax under 5%</span>'},
+  {d:5500,h:'<span class="tdim">&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;&mdash;</span>'},
+  {d:5900,h:'<span class="tk">SCORE </span><span class="tok">92 / 100</span>'},
+  {d:6400,h:'<span class="tok">&#10003; Alert dispatched to your phone</span>'},
+  {d:7000,h:'<span class="tdim">Next cycle in 300s...</span> <span class="cur"></span>'},
+];
+let tIds=[],tLoop=null;
+function runTerm(){
+  const b=document.getElementById('tbd');
+  tIds.forEach(clearTimeout);tIds=[];
+  if(tLoop)clearTimeout(tLoop);
+  b.innerHTML='';
+  SC.forEach(({d,h})=>{
+    const id=setTimeout(()=>{
+      b.querySelectorAll('.cur').forEach(c=>c.remove());
+      const l=document.createElement('div');
+      l.className='tl';l.innerHTML=h;
+      b.appendChild(l);b.scrollTop=b.scrollHeight;
+    },d);
+    tIds.push(id);
+  });
+  tLoop=setTimeout(runTerm,SC[SC.length-1].d+3000);
+}
+runTerm();
+
+// ── Ticker ────────────────────────────────────────────────────────────
+(function(){
+  const T=[
+    {n:'COINBASE USDC',v:'4.1% APY',d:1},{n:'AAVE V3 BASE',v:'7.8% APY',d:1},
+    {n:'MORPHO BASE',v:'9.2% APY',d:1},{n:'KRAKEN USDC',v:'3.5% APY',d:-1},
+    {n:'SCANNER',v:'&#9679; ACTIVE',d:0},{n:'LAST ARB',v:'+$14.20',d:1},
+    {n:'WIN RATE 30D',v:'71%',d:1},{n:'OPEN POSITIONS',v:'3',d:0},
+    {n:'BASE MAINNET',v:'&#9679; LIVE',d:0},{n:'SOLANA',v:'&#9679; LIVE',d:0},
+    {n:'DAILY P&amp;L',v:'+$284',d:1},
+  ];
+  const r=document.getElementById('tr');
+  const arr=[...T,...T];
+  r.innerHTML=arr.map(({n,v,d})=>{
+    const a=d===1?' <span class="tup">&#9650;</span>':d===-1?' <span class="tdn">&#9660;</span>':'';
+    return`<span class="ti"><span class="tn">${n}</span><span class="tv">${v}${a}</span></span>`;
+  }).join('');
+})();
+
+// ── Count-up ──────────────────────────────────────────────────────────
+function countUp(el){
+  const t=parseInt(el.dataset.n,10);
+  if(isNaN(t))return;
+  const s=el.dataset.s||'';
+  const dur=1400,start=performance.now();
+  (function tick(now){
+    const p=Math.min((now-start)/dur,1);
+    const e=1-Math.pow(1-p,3);
+    el.textContent=Math.round(t*e)+s;
+    if(p<1)requestAnimationFrame(tick);
+  })(start);
+}
+
+// ── IntersectionObserver ──────────────────────────────────────────────
+const io=new IntersectionObserver(entries=>{
+  entries.forEach(e=>{
+    if(!e.isIntersecting)return;
+    e.target.classList.add('in');
+    e.target.querySelectorAll('[data-n]').forEach(el=>{
+      if(!el._c){el._c=true;countUp(el);}
+    });
+    io.unobserve(e.target);
+  });
+},{threshold:.12});
+document.querySelectorAll('.rev,.sk').forEach(el=>io.observe(el));
+
+// ── FAQ ───────────────────────────────────────────────────────────────
+document.addEventListener('click', function(e) {
+  var q = e.target.closest('.faq-question');
+  if (!q) return;
+  var item = q.closest('.faq-item');
+  var wasOpen = item.classList.contains('open');
+  document.querySelectorAll('.faq-item.open').forEach(function(el) {
+    el.classList.remove('open');
+  });
+  if (!wasOpen) item.classList.add('open');
+});
+</script>
+</body>
+</html>
