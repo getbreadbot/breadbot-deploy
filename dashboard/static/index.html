@@ -10,9 +10,11 @@
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <link rel="stylesheet" href="/static/css/terminal.css"/>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/tippy.js@6/dist/tippy.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/driver.js@1/dist/driver.css">
   <link rel="stylesheet" href="/static/css/help.css">
   <script src="https://cdn.jsdelivr.net/npm/@popperjs/core@2/dist/umd/popper.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tippy.js@6/dist/tippy-bundle.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/driver.js@1/dist/driver.js.iife.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -42,6 +44,7 @@
         <span class="refresh-countdown" id="refresh-countdown">30s</span>
       </div>
       <div class="last-updated" id="last-updated">—</div>
+      <button class="tour-replay-btn" onclick="TourSystem && TourSystem.replay()" title="Take the tour again">? Tour</button>
     </div>
   </aside>
   <main class="main-content">
@@ -58,6 +61,7 @@
   <script src="/static/js/charts.js"></script>
   <script src="/static/js/app.js"></script>
   <script src="/static/js/help.js"></script>
+  <script src="/static/js/tour.js"></script>
   <div id="toast-container"></div>
 </body>
 </html>

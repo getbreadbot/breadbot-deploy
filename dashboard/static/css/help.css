@@ -77,3 +77,102 @@
   outline-offset: 2px;
   border-radius: 4px;
 }
+
+/* ── Tour replay button ───────────────────────────────────────────────────────
+   Sits in the sidebar footer — small, unobtrusive, amber on hover.
+   ──────────────────────────────────────────────────────────────────────────── */
+.tour-replay-btn {
+  display: block;
+  width: 100%;
+  margin-top: 10px;
+  padding: 4px 0;
+  background: transparent;
+  border: none;
+  border-top: 1px solid #2a2d35;
+  color: #5a5d65;
+  font-size: 11px;
+  font-family: 'IBM Plex Mono', monospace;
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.tour-replay-btn:hover {
+  color: #f59e0b;
+}
+
+/* ── Driver.js popover overrides — match Breadbot dark theme ─────────────────
+   ──────────────────────────────────────────────────────────────────────────── */
+.driver-popover {
+  background-color: #1a1d23 !important;
+  color: #e8eaf0 !important;
+  border: 1px solid #2a2d35 !important;
+  border-radius: 8px !important;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6) !important;
+  font-family: 'DM Sans', sans-serif !important;
+  max-width: 300px !important;
+}
+
+.driver-popover-title {
+  color: #f59e0b !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+  margin-bottom: 6px !important;
+}
+
+.driver-popover-description {
+  color: #b0b3bb !important;
+  font-size: 13px !important;
+  line-height: 1.55 !important;
+}
+
+.driver-popover-progress-text {
+  color: #5a5d65 !important;
+  font-size: 11px !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+}
+
+.driver-popover-navigation-btns button {
+  background-color: #f59e0b !important;
+  color: #0d0f14 !important;
+  border: none !important;
+  border-radius: 4px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  padding: 5px 12px !important;
+  cursor: pointer !important;
+  transition: background-color 0.15s ease !important;
+}
+
+.driver-popover-navigation-btns button:hover {
+  background-color: #d97706 !important;
+}
+
+.driver-popover-navigation-btns button.driver-popover-prev-btn {
+  background-color: transparent !important;
+  color: #5a5d65 !important;
+  border: 1px solid #2a2d35 !important;
+}
+
+.driver-popover-navigation-btns button.driver-popover-prev-btn:hover {
+  color: #e8eaf0 !important;
+  border-color: #5a5d65 !important;
+}
+
+.driver-popover-close-btn {
+  color: #5a5d65 !important;
+  font-size: 18px !important;
+}
+
+.driver-popover-close-btn:hover {
+  color: #e8eaf0 !important;
+}
+
+.driver-popover-arrow-side-left.driver-popover-arrow {
+  border-right-color: #2a2d35 !important;
+}
+
+.driver-popover-arrow-side-right.driver-popover-arrow {
+  border-left-color: #2a2d35 !important;
+}
