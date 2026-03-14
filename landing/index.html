@@ -407,6 +407,19 @@ footer{border-top:1px solid var(--brd)}
 .trust-badges{display:flex;flex-wrap:wrap;gap:20px;justify-content:center;padding:32px 0}
 .trust-badge{display:flex;align-items:center;gap:8px;font-family:var(--mono);font-size:12px;letter-spacing:.06em;color:var(--mu)}
 
+/* ── VIDEOS ── */
+#videos{border-top:1px solid var(--brd);border-bottom:1px solid var(--brd);background:var(--bg2)}
+.vid-brow{border:1px solid var(--brd2);background:var(--bg3);box-shadow:0 32px 80px rgba(0,0,0,.65);margin-top:56px}
+.vid-player-wrap{position:relative;background:#000;aspect-ratio:16/9;overflow:hidden}
+.vid-player-wrap video{width:100%;height:100%;display:block;object-fit:contain}
+.vid-tabs{display:grid;grid-template-columns:repeat(6,1fr);background:var(--brd);gap:1px;border-top:1px solid var(--brd)}
+.vid-tab{background:var(--bg3);padding:16px 14px;border:none;cursor:pointer;font-family:var(--mono);font-size:9px;letter-spacing:.1em;color:var(--mu);text-transform:uppercase;text-align:left;transition:all .18s;border-top:2px solid transparent;line-height:1}
+.vid-tab:hover{background:var(--bg2);color:var(--t2)}
+.vid-tab.vt-on{background:var(--bg);color:var(--a);border-top-color:var(--a)}
+.vid-tab-title{font-size:10px;font-weight:600;margin-bottom:5px;color:inherit;display:block}
+.vid-tab-dur{color:var(--mu);font-size:8px;letter-spacing:.06em}
+.vid-tab.vt-on .vid-tab-dur{color:var(--t2)}
+
 /* ── RESPONSIVE ── */
 @media(max-width:960px){
   nav{padding:0 24px}
@@ -431,6 +444,7 @@ footer{border-top:1px solid var(--brd)}
   .faq-question{padding:20px 24px;font-size:13px}
   .faq-answer p{padding:0 24px 20px}
   .trust-badges{flex-direction:column;align-items:center;gap:12px}
+  .vid-tabs{grid-template-columns:repeat(3,1fr)}
 }
 </style>
 </head>
@@ -577,6 +591,53 @@ footer{border-top:1px solid var(--brd)}
             <div class="dtr"><span>BASED <span class="cm" style="font-size:7px">BASE</span></span><span class="cg2">95</span><span class="cg2">BUY</span></div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- VIDEOS -->
+<section id="videos">
+  <div class="wrap sec">
+    <div class="ey rev">See It In Action</div>
+    <h2 class="rev">Watch the dashboard<br>do its job.</h2>
+    <p class="ss rev">Six short walkthroughs &mdash; one for each core feature. Real data from the live dashboard, Charlie narrating.</p>
+    <div class="vid-brow rev">
+      <div class="bbar">
+        <span class="bd br"></span><span class="bd by"></span><span class="bd bg"></span>
+        <span class="burl">demo.breadbot.app &mdash; <span id="vid-label">Yield Monitor</span></span>
+      </div>
+      <div class="vid-player-wrap">
+        <video id="vid-main" controls preload="metadata" playsinline>
+          <source id="vid-src" src="/videos/yields_page.mp4" type="video/mp4">
+          Your browser does not support HTML5 video.
+        </video>
+      </div>
+      <div class="vid-tabs">
+        <button class="vid-tab vt-on" data-src="/videos/yields_page.mp4" data-label="Yield Monitor" onclick="switchVid(this)">
+          <span class="vid-tab-title">Yield Monitor</span>
+          <span class="vid-tab-dur">33s</span>
+        </button>
+        <button class="vid-tab" data-src="/videos/scanner_alerts.mp4" data-label="Scanner Alerts" onclick="switchVid(this)">
+          <span class="vid-tab-title">Scanner Alerts</span>
+          <span class="vid-tab-dur">41s</span>
+        </button>
+        <button class="vid-tab" data-src="/videos/manual_vs_auto.mp4" data-label="Manual vs Auto" onclick="switchVid(this)">
+          <span class="vid-tab-title">Manual vs Auto</span>
+          <span class="vid-tab-dur">40s</span>
+        </button>
+        <button class="vid-tab" data-src="/videos/daily_loss_limit.mp4" data-label="Daily Loss Limit" onclick="switchVid(this)">
+          <span class="vid-tab-title">Daily Loss Limit</span>
+          <span class="vid-tab-dur">38s</span>
+        </button>
+        <button class="vid-tab" data-src="/videos/strategy_setup.mp4" data-label="Strategy Setup" onclick="switchVid(this)">
+          <span class="vid-tab-title">Strategy Setup</span>
+          <span class="vid-tab-dur">40s</span>
+        </button>
+        <button class="vid-tab" data-src="/videos/auto_executed_trade.mp4" data-label="Auto Trade" onclick="switchVid(this)">
+          <span class="vid-tab-title">Auto Trade</span>
+          <span class="vid-tab-dur">43s</span>
+        </button>
       </div>
     </div>
   </div>
@@ -868,6 +929,21 @@ const io=new IntersectionObserver(entries=>{
   });
 },{threshold:.12});
 document.querySelectorAll('.rev,.sk').forEach(el=>io.observe(el));
+
+// ── Video tab switcher ────────────────────────────────────────────────
+function switchVid(tab) {
+  var vid = document.getElementById('vid-main');
+  var src = document.getElementById('vid-src');
+  var label = document.getElementById('vid-label');
+  document.querySelectorAll('.vid-tab').forEach(function(t){t.classList.remove('vt-on');});
+  tab.classList.add('vt-on');
+  var wasPlaying = !vid.paused;
+  vid.pause();
+  src.src = tab.dataset.src;
+  label.textContent = tab.dataset.label;
+  vid.load();
+  if (wasPlaying) vid.play();
+}
 
 // ── FAQ ───────────────────────────────────────────────────────────────
 document.addEventListener('click', function(e) {
