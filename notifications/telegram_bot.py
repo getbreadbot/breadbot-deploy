@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 from loguru import logger
 import config
+from notifications.i18n import t, SUPPORTED_LANGS
 
 # ── Alert formatting ────────────────────────────────────────────────────────
 
@@ -50,6 +51,7 @@ class TelegramController:
         self.risk          = risk_manager
         self.get_db        = db_getter
         self.execute_trade = execute_trade   # wired in main.py — None in Phase 1
+        self._user_langs: dict[int, str] = {}  # chat_id → lang code (in-memory, resets on restart)
         self.app           = ApplicationBuilder().token(config.TELEGRAM_BOT_TOKEN).build()
         self._register_handlers()
 
@@ -59,6 +61,7 @@ class TelegramController:
         self.app.add_handler(CommandHandler("positions", self._cmd_positions))
         self.app.add_handler(CommandHandler("pause",     self._cmd_pause))
         self.app.add_handler(CommandHandler("resume",    self._cmd_resume))
+        self.app.add_handler(CommandHandler("lang",      self._cmd_lang))
         self.app.add_handler(CallbackQueryHandler(self._handle_button))
 
     # ── Commands ────────────────────────────────────────────
@@ -120,6 +123,23 @@ class TelegramController:
         finally:
             await db.close()
 
+    def _lang(self, chat_id: int) -> str:
+        """Return the stored language for a chat_id, defaulting to English."""
+        return self._user_langs.get(chat_id, "en")
+
+    async def _cmd_lang(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+        """Send a language picker with inline buttons."""
+        lang = self._lang(update.effective_chat.id)
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton(t("telegram.lang_picker.english",    lang), callback_data="setlang:en"),
+            InlineKeyboardButton(t("telegram.lang_picker.portuguese", lang), callback_data="setlang:pt"),
+            InlineKeyboardButton(t("telegram.lang_picker.spanish",    lang), callback_data="setlang:es"),
+        ]])
+        await update.message.reply_text(
+            t("telegram.lang_picker.prompt", lang),
+            reply_markup=keyboard,
+        )
+
     async def _cmd_pause(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         self.risk.pause()
         await update.message.reply_text("⏸ Trading paused. Send /resume when ready.")
@@ -134,7 +154,18 @@ class TelegramController:
         query = update.callback_query
         await query.answer()
         action, alert_id_str = query.data.split(":", 1)
-        alert_id = int(alert_id_str)
+        alert_id = int(alert_id_str) if alert_id_str.isdigit() else None
+
+        # ── Language selection ──────────────────────────────
+        if action == "setlang":
+            new_lang = alert_id_str if alert_id_str in SUPPORTED_LANGS else "en"
+            self._user_langs[update.effective_chat.id] = new_lang
+            lang_names = {"en": "English", "pt": "Português", "es": "Español"}
+            label = lang_names.get(new_lang, new_lang)
+            await query.edit_message_text(
+                t("telegram.lang_picker.set_confirmation", new_lang, lang=label)
+            )
+            return
 
         db = await self.get_db()
         try:
