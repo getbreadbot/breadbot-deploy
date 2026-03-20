@@ -42,6 +42,11 @@ from yield_rebalancer import handle_rebalance_command, handle_rebalance_callback
 from pendle_connector import handle_pendle_command
 from grid_engine import GridEngine, handle_grid_command
 from funding_arb_engine import FundingArbEngine, handle_funding_command
+from alt_data_signals import (
+    get_cached_composite,
+    handle_signals_command,
+    handle_feargreed_command,
+)
 
 # Engine singletons — shared across poller and main loop
 _grid_engine    = GridEngine()
@@ -458,6 +463,14 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     # 1. Security check
     score, flags = await check_token_security(client, chain, token_addr)
 
+    # Alt data composite signal adjustment
+    composite = get_cached_composite()
+    if composite is not None:
+        if composite > 30:
+            score = min(100, score + 3)
+        elif composite < -30:
+            score = max(0, score - 3)
+
     # Hard drop: score below minimum — don't alert at all
     if score < 50:
         log.info("  Dropped %s: score %d < 50", symbol, score)
@@ -604,6 +617,10 @@ async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
         await handle_grid_command(client, args, _grid_engine)
     elif cmd == "funding":
         await handle_funding_command(client, args, _funding_engine)
+    elif cmd == "signals":
+        await handle_signals_command(client)
+    elif cmd == "feargreed":
+        await handle_feargreed_command(client)
 
 # ── Main scan loop ────────────────────────────────────────────────────────────
 

@@ -39,6 +39,15 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
+try:
+    from alt_data_signals import get_cached_fear_greed, get_cached_recession_prob, get_cached_composite
+    _ALT_DATA_AVAILABLE = True
+except ImportError:
+    _ALT_DATA_AVAILABLE = False
+    def get_cached_fear_greed(): return None
+    def get_cached_recession_prob(): return None
+    def get_cached_composite(): return None
+
 # ---------------------------------------------------------------------------
 # Strategy definitions
 # ---------------------------------------------------------------------------
@@ -289,6 +298,33 @@ class AutoExecutor:
 
         # ── All checks passed — auto-execute ──────────────────────────────
         position_usd = self._calc_position(score, strategy["position_multiplier"])
+
+        # ── Alt data hooks ─────────────────────────────────────────────
+        if _ALT_DATA_AVAILABLE:
+            # Hook 1: Fear & Greed — reduce position sizing in extreme fear
+            fg = get_cached_fear_greed()
+            if fg is not None and fg < 20:
+                multiplier = float(os.getenv("FEAR_GREED_SIZE_MULTIPLIER", "0.6"))
+                position_usd = round(position_usd * multiplier, 2)
+
+            # Hook 2: Recession probability — reduce sizing when Kalshi shows >50%
+            rec = get_cached_recession_prob()
+            if rec is not None and rec > 0.50:
+                position_usd = round(position_usd * 0.7, 2)
+
+            # Hook 3: Composite signal — block auto-execution if below pause threshold
+            composite = get_cached_composite()
+            pause_threshold = float(os.getenv("COMPOSITE_PAUSE_THRESHOLD", "-50"))
+            if composite is not None and composite < pause_threshold:
+                return ExecutionResult(
+                    executed=False, blocked=True, strategy=self.strategy_name,
+                    alert_score=score, position_usd=0.0,
+                    reason=(
+                        f"Alt data composite signal {composite:+.0f} is below pause "
+                        f"threshold ({pause_threshold:.0f}). Auto-execution suspended."
+                    ),
+                )
+
         return ExecutionResult(
             executed=True, blocked=False, strategy=self.strategy_name,
             alert_score=score, position_usd=position_usd,
