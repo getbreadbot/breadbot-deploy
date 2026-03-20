@@ -4,7 +4,7 @@ alt_data_signals.py — Alternative data signal layer, Phase 1.
 
 Sources (all unauthenticated, read-only):
   - Fear & Greed Index (alternative.me)
-  - SentiCrypt BTC sentiment
+  - CoinGecko community sentiment (replaces SentiCrypt — TLS errors, service unreliable)
   - DefiLlama TVL (Solana + Base)
   - Kalshi prediction markets (Phase 2, off by default)
 
@@ -39,7 +39,7 @@ log = logging.getLogger("alt_data")
 
 _cache: dict = {
     "fear_greed": None, "fg_label": None,
-    "senticrypt": None,
+    "coingecko_sentiment": None,       # CoinGecko sentiment_votes_up_percentage, normalised -1..+1
     "solana_tvl_now": None, "solana_tvl_7d_ago": None,
     "base_tvl_now": None, "base_tvl_7d_ago": None,
     "kalshi_btc_prob": None, "kalshi_eth_prob": None, "kalshi_sol_prob": None,
@@ -164,20 +164,36 @@ async def _fetch_fear_greed(client: httpx.AsyncClient) -> None:
         log.error("Fear & Greed fetch error: %s", exc)
         _cache["last_error"] = f"fear_greed: {exc}"
 
-async def _fetch_senticrypt(client: httpx.AsyncClient) -> None:
-    """Fetch BTC sentiment from SentiCrypt."""
-    if not _env_bool("SENTICRYPT_ENABLED", "true"):
-        return
+async def _fetch_coingecko_sentiment(client: httpx.AsyncClient) -> None:
+    """Fetch BTC community sentiment from CoinGecko (free, no API key).
+
+    Returns sentiment_votes_up_percentage normalised to -1.0..+1.0.
+    Formula: (up_pct / 100) * 2 - 1.0
+    At 79% bullish → +0.58; at 50% neutral → 0.0; at 30% → -0.40.
+    """
     try:
-        r = await client.get("https://api.senticrypt.com/v2/all.json", timeout=15)
+        r = await client.get(
+            "https://api.coingecko.com/api/v3/coins/bitcoin",
+            params={
+                "localization": "false",
+                "tickers": "false",
+                "market_data": "false",
+                "community_data": "false",
+                "developer_data": "false",
+            },
+            timeout=15,
+        )
         data = r.json()
-        mean = float(data[-1]["mean"])
-        _cache["senticrypt"] = mean
-        _db_write("senticrypt", "sentiment", mean, description="BTC sentiment mean")
-        log.info("SentiCrypt: %.4f", mean)
+        up_pct = data.get("sentiment_votes_up_percentage")
+        if up_pct is None:
+            return
+        normalised = (float(up_pct) / 100.0) * 2.0 - 1.0
+        _cache["coingecko_sentiment"] = normalised
+        _db_write("coingecko", "sentiment", normalised,
+                  description=f"BTC community sentiment (up={up_pct:.1f}%)")
+        log.info("CoinGecko BTC sentiment: %.3f (up=%.1f%%)", normalised, up_pct)
     except Exception as exc:
-        log.error("SentiCrypt fetch error: %s", exc)
-        _cache["last_error"] = f"senticrypt: {exc}"
+        log.warning("CoinGecko sentiment fetch error: %s", exc)
 
 async def _fetch_defillama(client: httpx.AsyncClient) -> None:
     """Fetch TVL data from DefiLlama for Solana and Base."""
@@ -363,7 +379,7 @@ def _compute_composite() -> None:
         weights["Fear &amp; Greed"] = 0.25
 
     # SentiCrypt: value * 100 → -100..+100
-    sc = _cache["senticrypt"]
+    sc = _cache["coingecko_sentiment"]
     if sc is not None:
         val = sc * 100
         components["BTC Sentiment"] = val
@@ -476,9 +492,9 @@ async def handle_signals_command(client: httpx.AsyncClient) -> None:
     if fg is not None:
         lines.append(f"  Fear &amp; Greed: {fg}/100 ({fg_label})")
 
-    sc = _cache["senticrypt"]
-    if sc is not None:
-        lines.append(f"  BTC Sentiment: {sc:.3f}")
+    cg = _cache["coingecko_sentiment"]
+    if cg is not None:
+        lines.append(f"  BTC Sentiment (CoinGecko): {cg:+.3f}")
 
     sol = _cache["solana_tvl_now"]
     if sol is not None:
@@ -541,7 +557,7 @@ async def alt_data_loop() -> None:
         while True:
             try:
                 await _fetch_fear_greed(client)
-                await _fetch_senticrypt(client)
+                await _fetch_coingecko_sentiment(client)
                 await _fetch_defillama(client)
                 await _fetch_kalshi(client)
                 coinalyze_rows = await _fetch_coinalyze(client)
@@ -573,12 +589,12 @@ async def alt_data_loop() -> None:
                     )
 
                 fg = _cache["fear_greed"]
-                sc = _cache["senticrypt"]
+                cg = _cache["coingecko_sentiment"]
                 log.info(
-                    "Alt data poll complete — composite=%s  fg=%s  senticrypt=%s",
+                    "Alt data poll complete — composite=%s  fg=%s  coingecko=%s",
                     f"{composite:+.1f}" if composite is not None else "N/A",
                     fg if fg is not None else "N/A",
-                    f"{sc:.4f}" if sc is not None else "N/A",
+                    f"{cg:.3f}" if cg is not None else "N/A",
                 )
             except Exception as exc:
                 log.error("Alt data loop error: %s", exc, exc_info=True)
