@@ -173,18 +173,17 @@ async def poll_aave(client: httpx.AsyncClient) -> dict:
 
 
 async def poll_compound(client: httpx.AsyncClient) -> dict:
-    """Compound V3 USDC supply APY on Base."""
+    """Compound V3 USDC supply APY on Base via DeFi Llama (Compound V2 API shut down Apr 2023)."""
     apy = 4.80
+    COMPOUND_BASE_POOL = "0c8567f8-ba5b-41ad-80de-00a71895eb19"
     try:
         resp = await client.get(
-            "https://api.compound.finance/api/v2/ctoken?addresses[]=0xb125E6687d4313864e53df431d5425969c15Eb2",
-            timeout=12,
+            f"https://yields.llama.fi/chart/{COMPOUND_BASE_POOL}", timeout=12
         )
-        data = resp.json().get("cToken", [])
-        if data:
-            raw = float(data[0].get("supply_rate", {}).get("value", "0"))
-            if raw > 0:
-                apy = raw * 100 if raw < 1 else raw
+        if resp.status_code == 200:
+            data = resp.json().get("data", [])
+            if data:
+                apy = float(data[-1].get("apy", apy))
     except Exception as exc:
         log.warning("Compound poll failed: %s — using %.2f%% fallback", exc, apy)
     await _maybe_alert(client, "Compound V3", "USDC", apy)
@@ -241,14 +240,17 @@ async def poll_liquid_staking_rates(client: httpx.AsyncClient) -> list[dict]:
     log.info("mSOL: %.2f%%", msol_apy)
     results.append({"platform": "Marinade", "asset": "mSOL", "apy": msol_apy})
 
-    # Sanctum INF — public stats endpoint
+    # Sanctum INF — via DeFi Llama (extra.sanctum.so DNS unreachable from VPS)
     inf_apy = 8.10
+    SANCTUM_INF_POOL = "3075a746-bdd1-4aac-bcd5-b035abee2622"
     try:
-        resp = await client.get("https://extra.sanctum.so/api/infinity/apy", timeout=10)
+        resp = await client.get(
+            f"https://yields.llama.fi/chart/{SANCTUM_INF_POOL}", timeout=10
+        )
         if resp.status_code == 200:
-            val = resp.json().get("apy")
-            if val is not None:
-                inf_apy = float(val) * 100 if float(val) < 1 else float(val)
+            data = resp.json().get("data", [])
+            if data:
+                inf_apy = float(data[-1].get("apy", inf_apy))
     except Exception as exc:
         log.warning("Sanctum INF poll failed: %s — using %.2f%% fallback", exc, inf_apy)
     await _maybe_alert(client, "Sanctum", "INF", inf_apy, LST_THRESHOLD)
@@ -334,21 +336,15 @@ async def poll_kamino_rates(client: httpx.AsyncClient) -> dict:
         return {}
 
     apy = 6.00
+    KAMINO_USDC_POOL = "d2141a59-c199-4be7-8d4b-c8223954836b"
     try:
         resp = await client.get(
-            "https://api.kamino.finance/v2/lending/rates", timeout=12
+            f"https://yields.llama.fi/chart/{KAMINO_USDC_POOL}", timeout=12
         )
         if resp.status_code == 200:
-            data = resp.json()
-            rates = data if isinstance(data, list) else data.get("data", [])
-            for item in rates:
-                if isinstance(item, dict):
-                    asset = (item.get("asset") or item.get("symbol") or "").upper()
-                    if "USDC" in asset:
-                        raw = item.get("supplyApy") or item.get("apy") or item.get("supply_apy")
-                        if raw is not None:
-                            apy = float(raw) * 100 if float(raw) < 1 else float(raw)
-                        break
+            data = resp.json().get("data", [])
+            if data:
+                apy = float(data[-1].get("apy", apy))
     except Exception as exc:
         log.warning("Kamino poll failed: %s — using %.2f%% fallback", exc, apy)
 
