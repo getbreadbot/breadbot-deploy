@@ -519,8 +519,31 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
         return
 
     if result.executed:
-        msg = build_auto_buy_message(pair, score, flags, result)
-        await send_message(client, msg)
+        # Attempt actual exchange execution
+        trade_ok = False
+        try:
+            from exchange_executor import execute_trade
+            trade_ok = execute_trade(
+                chain=pair["chain"],
+                token_addr=pair["token_addr"],
+                symbol=pair.get("symbol", "UNKNOWN"),
+                position_usd=result.position_usd,
+                price_usd=pair.get("price_usd", 0.0),
+            )
+        except Exception as exc:
+            log.error("exchange_executor import or call failed: %s", exc)
+
+        # Telegram notice — adjust message if execution failed
+        if not trade_ok:
+            # Execution failed — downgrade to manual approval so operator can act
+            update_alert_decision(alert_id, "pending")
+            text, position = build_approval_message(pair, score, flags, result)
+            text = f"[Auto-exec attempted but FAILED — manual approval needed]\n\n{text}"
+            keyboard = build_buy_keyboard(alert_id, position)
+            await send_message(client, text, reply_markup=keyboard)
+        else:
+            msg = build_auto_buy_message(pair, score, flags, result)
+            await send_message(client, msg)
     else:
         text, position = build_approval_message(pair, score, flags, result)
         keyboard       = build_buy_keyboard(alert_id, position)
@@ -621,6 +644,71 @@ async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
         await handle_signals_command(client)
     elif cmd == "feargreed":
         await handle_feargreed_command(client)
+    elif cmd == "automode":
+        await handle_automode_command(client, args)
+    elif cmd == "status":
+        await handle_status_command(client)
+
+async def handle_automode_command(client: httpx.AsyncClient, args: str) -> None:
+    """Handle /automode on|off — toggle auto-execution mode at runtime."""
+    arg = args.strip().lower()
+    if arg not in ("on", "off"):
+        await send_message(client, "Usage: /automode on  or  /automode off")
+        return
+    # Write to bot_config table (DB-first config pattern used by AutoExecutor)
+    conn = db_rw()
+    try:
+        conn.execute(
+            """INSERT INTO bot_config (key, value, updated_at)
+               VALUES ('execution_mode', ?, datetime('now'))
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value,
+               updated_at=excluded.updated_at""",
+            ("auto" if arg == "on" else "manual",)
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    mode_label = "AUTO" if arg == "on" else "MANUAL"
+    await send_message(
+        client,
+        f"Execution mode set to <b>{mode_label}</b>.\n\n"
+        f"{'Bot will auto-execute alerts that pass strategy thresholds.' if arg == 'on' else 'Bot will send alerts for manual approval.'}"
+    )
+    log.info("Execution mode changed to %s via Telegram", mode_label)
+
+
+async def handle_status_command(client: httpx.AsyncClient) -> None:
+    """Handle /status — show full bot state snapshot."""
+    summary = executor.get_strategy_summary()
+
+    from alt_data_signals import get_cached_composite, get_cached_fear_greed, _cache as _alt_cache
+
+    composite = get_cached_composite()
+    fg = get_cached_fear_greed()
+    fg_label = _alt_cache.get("fg_label", "")
+
+    paused_str  = "PAUSED" if summary["is_paused"] else "ACTIVE"
+    mode_str    = summary["execution_mode"].upper()
+    strat_str   = summary["strategy"].upper()
+    trades_str  = f"{summary['trades_today']}/{summary['max_trades_per_day']}"
+    loss_str    = "LIMIT HIT" if summary["daily_loss_exceeded"] else "OK"
+
+    comp_str = f"{composite:+.0f}" if composite is not None else "N/A"
+    fg_str   = f"{fg}/100 ({fg_label})" if fg is not None else "N/A"
+
+    text = (
+        f"<b>Breadbot Status</b>\n\n"
+        f"State:         {paused_str}\n"
+        f"Mode:          {mode_str}\n"
+        f"Strategy:      {strat_str}\n"
+        f"Trades today:  {trades_str}\n"
+        f"Daily loss:    {loss_str}\n\n"
+        f"<b>Alt Data Signals</b>\n"
+        f"Composite:     {comp_str}\n"
+        f"Fear/Greed:    {fg_str}\n"
+    )
+    await send_message(client, text)
+
 
 # ── Main scan loop ────────────────────────────────────────────────────────────
 
