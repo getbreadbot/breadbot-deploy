@@ -33,6 +33,12 @@ MAX_SLIPPAGE_BPS   = int(os.getenv("SOLANA_MAX_SLIPPAGE_BPS", "50"))
 # USDC on Solana
 USDC_MINT          = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
 
+# ── Jito MEV protection ─────────────────────────────────────────────────────────────
+JITO_ENABLED      = os.getenv("JITO_ENABLED",      "false").lower() == "true"
+JITO_TIP_LAMPORTS = int(os.getenv("JITO_TIP_LAMPORTS", "500000"))
+JITO_ENDPOINT     = "https://mainnet.block-engine.jito.wtf/api/v1/transactions"
+
+
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
@@ -167,7 +173,11 @@ def sign_and_send(tx_b64: str) -> str:
             },
         ],
     }
-    rpc_resp = requests.post(RPC_URL, json=rpc_payload, timeout=30)
+    # Route through Jito Block Engine (MEV protected) or standard RPC
+    send_url = JITO_ENDPOINT if JITO_ENABLED else RPC_URL
+    if JITO_ENABLED:
+        logger.info("Jito MEV protection active — routing via Block Engine")
+    rpc_resp = requests.post(send_url, json=rpc_payload, timeout=30)
     rpc_resp.raise_for_status()
     result = rpc_resp.json()
 

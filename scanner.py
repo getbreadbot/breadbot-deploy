@@ -38,6 +38,14 @@ from config import (
     TELEGRAM_CHAT_ID,
 )
 from auto_executor import AutoExecutor
+from yield_rebalancer import handle_rebalance_command, handle_rebalance_callback
+from pendle_connector import handle_pendle_command
+from grid_engine import GridEngine, handle_grid_command
+from funding_arb_engine import FundingArbEngine, handle_funding_command
+
+# Engine singletons — shared across poller and main loop
+_grid_engine    = GridEngine()
+_funding_engine = FundingArbEngine()
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────
@@ -525,12 +533,13 @@ async def telegram_poller(client: httpx.AsyncClient) -> None:
             resp    = await tg_call(
                 client, "getUpdates",
                 offset=_tg_offset, timeout=2,
-                allowed_updates=["callback_query"],
+                allowed_updates=["callback_query", "message"],
             )
             updates = resp.get("result") or []
             for upd in updates:
                 _tg_offset = upd["update_id"] + 1
                 await _handle_callback(client, upd.get("callback_query"))
+                await _handle_message(client, upd.get("message"))
         except Exception as exc:
             log.error("Telegram poller error: %s", exc)
         await asyncio.sleep(TG_POLL_INTERVAL)
@@ -555,6 +564,9 @@ async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
         update_alert_decision(alert_id, "skip")
         reply = "Alert skipped and logged."
         log.info("Manual SKIP decision recorded for alert_id=%d", alert_id)
+    elif data.startswith("rebalance_"):
+        await handle_rebalance_callback(client, data, cb_id)
+        return
     else:
         return
 
@@ -571,6 +583,27 @@ async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
             parse_mode="HTML",
         )
 
+
+
+
+async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
+    """Route incoming /command text messages from the bot owner."""
+    if not msg:
+        return
+    text = (msg.get("text") or "").strip()
+    if not text.startswith("/"):
+        return
+    parts = text.lstrip("/").split(None, 1)
+    cmd   = parts[0].lower()
+    args  = parts[1] if len(parts) > 1 else ""
+    if cmd == "rebalance":
+        await handle_rebalance_command(client, args)
+    elif cmd == "pendle":
+        await handle_pendle_command(client, args)
+    elif cmd == "grid":
+        await handle_grid_command(client, args, _grid_engine)
+    elif cmd == "funding":
+        await handle_funding_command(client, args, _funding_engine)
 
 # ── Main scan loop ────────────────────────────────────────────────────────────
 

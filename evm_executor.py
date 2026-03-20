@@ -37,6 +37,11 @@ BASE_RPC         = os.getenv("EVM_BASE_RPC_URL",      "").strip()
 ARBITRUM_RPC     = os.getenv("EVM_ARBITRUM_RPC_URL",  "").strip()
 MAX_SLIPPAGE_BPS = int(os.getenv("EVM_MAX_SLIPPAGE_BPS", "50"))
 
+# ── Flashbots MEV protection (Base only) ─────────────────────────────
+FLASHBOTS_PROTECT_ENABLED = os.getenv("FLASHBOTS_PROTECT_ENABLED", "false").lower() == "true"
+_FLASHBOTS_BASE_RPC       = "https://rpc.flashbots.net/fast"
+
+
 # Uniswap V3 SwapRouter02 — same address on Base and Arbitrum
 _SWAP_ROUTER = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
 
@@ -232,6 +237,37 @@ def build_swap_tx(chain: Chain, token_in: str, token_out: str, amount_in: int,
 
 
 # ── Self-test ──────────────────────────────────────────────────────────────────
+
+
+# ── Transaction broadcast ─────────────────────────────────────────────────────────────
+
+def send_raw_transaction(chain: Chain, signed_tx_hex: str) -> str:
+    """
+    Broadcast a signed raw transaction.
+    Routes through Flashbots Protect RPC on Base when FLASHBOTS_PROTECT_ENABLED=true,
+    preventing frontrunning at no extra cost. Falls back to standard RPC otherwise.
+    Arbitrum always uses the standard RPC (Flashbots Protect is Base/ETH only).
+
+    Args:
+        chain:          "base" or "arbitrum"
+        signed_tx_hex:  Hex-encoded signed transaction (0x-prefixed)
+
+    Returns:
+        Transaction hash string.
+
+    Raises:
+        RuntimeError on RPC error or missing config.
+    """
+    if chain == "base" and FLASHBOTS_PROTECT_ENABLED:
+        send_url = _FLASHBOTS_BASE_RPC
+        logger.info("Flashbots Protect RPC active — MEV protection enabled for Base tx")
+    else:
+        send_url = _check_rpc(chain)
+
+    result = _rpc_call(send_url, "eth_sendRawTransaction", [signed_tx_hex])
+    tx_hash = result if isinstance(result, str) else str(result)
+    logger.info("Transaction broadcast on %s: %s", chain, tx_hash)
+    return tx_hash
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     print(f"evm_executor self-test | slippage={MAX_SLIPPAGE_BPS} bps")
