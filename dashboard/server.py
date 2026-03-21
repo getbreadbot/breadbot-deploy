@@ -1410,7 +1410,14 @@ async def api_setup_test_telegram(body: SetupTestBody):
 def serve_frontend(path: str = ""):
     index = Path(__file__).parent / "static" / "index.html"
     if index.exists():
-        return FileResponse(str(index))
+        return FileResponse(
+            str(index),
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0",
+            }
+        )
     return JSONResponse({"error": "Frontend not ready"}, status_code=503)
 
 
