@@ -1329,142 +1329,203 @@ const Pages = {
   async signals(c) {
     const d = await API.get('/api/signals').catch(() => ({}));
 
+    // helpers
     const sigClass = v => v == null ? '' : v > 10 ? 'positive' : v < -10 ? 'negative' : 'amber';
-    const fmtTvl = v => v != null ? '$' + (v / 1e9).toFixed(2) + 'B' : '—';
+    const fmtTvl   = v => v != null ? '$' + (v / 1e9).toFixed(2) + 'B' : '\u2014';
+
     const fmtFunding = v => {
-      if (v == null) return '<span class="td-muted">—</span>';
-      const cls = v > 0 ? 'positive' : v < 0 ? 'negative' : '';
+      if (v == null) return '<span class="td-muted">\u2014</span>';
+      const cls  = v > 0 ? 'positive' : v < 0 ? 'negative' : '';
       const sign = v > 0 ? '+' : '';
-      const ann = (v * 3 * 365 * 100).toFixed(1);
-      return `<span class="${cls}">${sign}${(v*100).toFixed(4)}% <span class="td-muted">(${sign}${ann}%/yr)</span></span>`;
+      const ann  = (v * 3 * 365 * 100).toFixed(1);
+      return '<span class="' + cls + '">' + sign + (v*100).toFixed(4) + '% <span class="td-muted">(' + sign + ann + '%/yr)</span></span>';
     };
 
-    const comp = d.composite;
+    // composite gauge (SVG, no library)
+    const comp      = d.composite;
     const compColor = comp == null ? '#6b7280' : comp > 10 ? '#22c55e' : comp < -10 ? '#ef4444' : '#f59e0b';
     const compLabel = comp == null ? 'NO DATA' : comp > 30 ? 'BULLISH' : comp < -30 ? 'BEARISH' : 'NEUTRAL';
-    const toRad = deg => deg * Math.PI / 180;
-    const cx=100,cy=105,r=78,startAng=-225,totalAng=270;
-    const arcPath = (sd, sw) => {
-      if(Math.abs(sw)<0.01) return '';
-      const x1=cx+r*Math.cos(toRad(sd)),y1=cy+r*Math.sin(toRad(sd));
-      const x2=cx+r*Math.cos(toRad(sd+sw)),y2=cy+r*Math.sin(toRad(sd+sw));
-      return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${Math.abs(sw)>180?1:0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    const toRad     = deg => deg * Math.PI / 180;
+    const cx=100, cy=105, r=78, startAng=-225, totalAng=270;
+    const arcPath   = (sd, sw) => {
+      if (Math.abs(sw) < 0.01) return '';
+      const x1=cx+r*Math.cos(toRad(sd)), y1=cy+r*Math.sin(toRad(sd));
+      const x2=cx+r*Math.cos(toRad(sd+sw)), y2=cy+r*Math.sin(toRad(sd+sw));
+      const lg = Math.abs(sw) > 180 ? 1 : 0;
+      return 'M '+x1.toFixed(2)+' '+y1.toFixed(2)+' A '+r+' '+r+' 0 '+lg+' 1 '+x2.toFixed(2)+' '+y2.toFixed(2);
     };
-    const fillAng = comp!=null ? ((comp+100)/200)*totalAng : 0;
-    const gauge = `<svg viewBox="0 0 200 160" width="200" height="160" style="display:block;margin:0 auto">
-      <path d="${arcPath(startAng,totalAng)}" fill="none" stroke="var(--border-color)" stroke-width="12" stroke-linecap="round"/>
-      ${comp!=null?`<path d="${arcPath(startAng,fillAng)}" fill="none" stroke="${compColor}" stroke-width="12" stroke-linecap="round" style="filter:drop-shadow(0 0 4px ${compColor}88)"/>`:''}
-      <text x="${cx}" y="${cy-8}" text-anchor="middle" fill="${compColor}" font-size="32" font-weight="600" font-family="IBM Plex Mono,monospace">${comp!=null?(comp>0?'+':'')+comp.toFixed(1):'—'}</text>
-      <text x="${cx}" y="${cy+14}" text-anchor="middle" fill="${compColor}" font-size="11" font-family="IBM Plex Mono,monospace" letter-spacing="2">${compLabel}</text>
-      <text x="${cx-r-4}" y="${cy+28}" text-anchor="middle" fill="var(--text-muted)" font-size="9" font-family="IBM Plex Mono,monospace">-100</text>
-      <text x="${cx+r+4}" y="${cy+28}" text-anchor="middle" fill="var(--text-muted)" font-size="9" font-family="IBM Plex Mono,monospace">+100</text>
-    </svg>`;
+    const fillAng = comp != null ? ((comp + 100) / 200) * totalAng : 0;
+    const compText = comp != null ? (comp > 0 ? '+' : '') + comp.toFixed(1) : '\u2014';
+    const gauge = '<svg viewBox="0 0 200 160" width="200" height="160" style="display:block;margin:0 auto">'
+      + '<path d="' + arcPath(startAng, totalAng) + '" fill="none" stroke="var(--border-color)" stroke-width="12" stroke-linecap="round"/>'
+      + (comp != null ? '<path d="' + arcPath(startAng, fillAng) + '" fill="none" stroke="' + compColor + '" stroke-width="12" stroke-linecap="round" style="filter:drop-shadow(0 0 4px ' + compColor + '88)"/>' : '')
+      + '<text x="' + cx + '" y="' + (cy-8) + '" text-anchor="middle" fill="' + compColor + '" font-size="32" font-weight="600" font-family="IBM Plex Mono,monospace">' + compText + '</text>'
+      + '<text x="' + cx + '" y="' + (cy+14) + '" text-anchor="middle" fill="' + compColor + '" font-size="11" font-family="IBM Plex Mono,monospace" letter-spacing="2">' + compLabel + '</text>'
+      + '<text x="' + (cx-r-4) + '" y="' + (cy+28) + '" text-anchor="middle" fill="var(--text-muted)" font-size="9" font-family="IBM Plex Mono,monospace">-100</text>'
+      + '<text x="' + (cx+r+4) + '" y="' + (cy+28) + '" text-anchor="middle" fill="var(--text-muted)" font-size="9" font-family="IBM Plex Mono,monospace">+100</text>'
+      + '</svg>';
 
+    // component rows
     const components = d.composite_components || {};
-    const compRows = Object.keys(components).length
-      ? Object.entries(components).map(([k,v]) => {
-          const barColor = v>10?'#22c55e':v<-10?'#ef4444':'#f59e0b';
-          const leftPct = v>=0?50:((v+100)/200*100).toFixed(0);
-          const widthPct = (Math.abs(v)/2).toFixed(0);
-          return `<tr>
-            <td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">${k}</td>
-            <td class="td-mono ${sigClass(v)}" style="padding:5px 8px">${(v>0?'+':'')+v.toFixed(1)}</td>
-            <td style="padding:5px 8px;vertical-align:middle">
-              <div style="position:relative;height:6px;background:var(--border-color);border-radius:3px;width:120px">
-                <div style="position:absolute;left:${leftPct}%;width:${widthPct}%;height:100%;background:${barColor};border-radius:3px"></div>
-              </div></td></tr>`;
-        }).join('')
-      : `<tr><td colspan="3" class="td-muted" style="padding:12px">Waiting for first poll cycle</td></tr>`;
+    let compRows = '';
+    if (Object.keys(components).length) {
+      Object.entries(components).forEach(function(pair) {
+        const k = pair[0], v = pair[1];
+        const barColor  = v > 10 ? '#22c55e' : v < -10 ? '#ef4444' : '#f59e0b';
+        const leftPct   = v >= 0 ? 50 : ((v + 100) / 200 * 100).toFixed(0);
+        const widthPct  = (Math.abs(v) / 2).toFixed(0);
+        compRows += '<tr>'
+          + '<td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">' + k + '</td>'
+          + '<td class="td-mono ' + sigClass(v) + '" style="padding:5px 8px">' + (v > 0 ? '+' : '') + v.toFixed(1) + '</td>'
+          + '<td style="padding:5px 8px;vertical-align:middle"><div style="position:relative;height:6px;background:var(--border-color);border-radius:3px;width:120px">'
+          + '<div style="position:absolute;left:' + leftPct + '%;width:' + widthPct + '%;height:100%;background:' + barColor + ';border-radius:3px"></div>'
+          + '</div></td></tr>';
+      });
+    } else {
+      compRows = '<tr><td colspan="3" class="td-muted" style="padding:12px">Waiting for first poll cycle</td></tr>';
+    }
 
-    const fg = d.fear_greed;
-    const fgLabel = d.fg_label || (fg!=null?(fg<=25?'Extreme Fear':fg<=45?'Fear':fg<=55?'Neutral':fg<=75?'Greed':'Extreme Greed'):'');
-    const fgColor = fg==null?'#6b7280':fg<=25?'#ef4444':fg<=45?'#f97316':fg<=55?'#f59e0b':fg<=75?'#84cc16':'#22c55e';
+    // fear & greed
+    const fg      = d.fear_greed;
+    const fgLabel = d.fg_label || (fg != null ? (fg <= 25 ? 'Extreme Fear' : fg <= 45 ? 'Fear' : fg <= 55 ? 'Neutral' : fg <= 75 ? 'Greed' : 'Extreme Greed') : '');
+    const fgColor = fg == null ? '#6b7280' : fg <= 25 ? '#ef4444' : fg <= 45 ? '#f97316' : fg <= 55 ? '#f59e0b' : fg <= 75 ? '#84cc16' : '#22c55e';
+    const fgBar   = fg != null
+      ? '<div style="position:relative;height:8px;background:var(--border-color);border-radius:4px">'
+        + '<div style="position:absolute;left:0;width:' + Math.min(fg,100) + '%;height:100%;background:' + fgColor + ';border-radius:4px"></div></div>'
+        + '<div class="stat-meta" style="margin-top:6px;display:flex;justify-content:space-between"><span>0 \u2014 Extreme Fear</span><span>100 \u2014 Extreme Greed</span></div>'
+      : '';
 
-    const kalshiRows = [
-      ['BTC price contract', d.kalshi_btc_prob],
-      ['ETH price contract', d.kalshi_eth_prob],
-      ['SOL price contract', d.kalshi_sol_prob],
-      ['Recession probability', d.recession_prob],
-    ].map(([label,v]) => {
-      if(v==null) return `<tr><td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">${label}</td><td class="td-muted" style="padding:5px 8px">no open market</td><td></td></tr>`;
-      const pct=Math.round(v*100);
-      const bc=pct>60?'#22c55e':pct<40?'#ef4444':'#f59e0b';
-      return `<tr>
-        <td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">${label}</td>
-        <td class="td-mono" style="color:${bc};font-weight:500;padding:5px 8px">${pct}%</td>
-        <td style="padding:5px 8px;vertical-align:middle">
-          <div style="position:relative;height:6px;background:var(--border-color);border-radius:3px;width:120px">
-            <div style="position:absolute;left:0;width:${pct}%;height:100%;background:${bc};border-radius:3px;max-width:100%"></div>
-          </div></td></tr>`;
-    }).join('');
+    // coingecko sentiment
+    let cgHtml = '<div class="stat-meta">No data</div>';
+    if (d.coingecko_sentiment != null) {
+      const rawPct  = (d.coingecko_sentiment + 1) / 2 * 100;
+      const bullPct = rawPct.toFixed(0);
+      const bearPct = (100 - rawPct).toFixed(0);
+      const sc      = rawPct > 60 ? '#22c55e' : rawPct < 40 ? '#ef4444' : '#f59e0b';
+      cgHtml = '<div style="font-size:36px;font-weight:600;color:' + sc + ';font-family:\'IBM Plex Mono\',monospace;margin-bottom:8px">'
+        + bullPct + '% <span style="font-size:13px;letter-spacing:1px">BULLISH</span></div>'
+        + '<div style="position:relative;height:8px;background:var(--border-color);border-radius:4px">'
+        + '<div style="position:absolute;left:0;width:' + bullPct + '%;height:100%;background:' + sc + ';border-radius:4px;max-width:100%"></div></div>'
+        + '<div class="stat-meta" style="margin-top:6px;display:flex;justify-content:space-between"><span>\u25b2 ' + bullPct + '% Bullish</span><span>\u25bc ' + bearPct + '% Bearish</span></div>';
+    }
 
-    const fundingRows = [
+    // kalshi rows
+    const kalshiPairs = [
+      ['BTC price contract',   d.kalshi_btc_prob],
+      ['ETH price contract',   d.kalshi_eth_prob],
+      ['SOL price contract',   d.kalshi_sol_prob],
+      ['Recession probability',d.recession_prob],
+    ];
+    let kalshiRows = '';
+    kalshiPairs.forEach(function(pair) {
+      const label = pair[0], v = pair[1];
+      if (v == null) {
+        kalshiRows += '<tr><td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">' + label + '</td>'
+          + '<td class="td-muted" style="padding:5px 8px">no open market</td><td></td></tr>';
+        return;
+      }
+      const pct = Math.round(v * 100);
+      const bc  = pct > 60 ? '#22c55e' : pct < 40 ? '#ef4444' : '#f59e0b';
+      kalshiRows += '<tr>'
+        + '<td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">' + label + '</td>'
+        + '<td class="td-mono" style="color:' + bc + ';font-weight:500;padding:5px 8px">' + pct + '%</td>'
+        + '<td style="padding:5px 8px;vertical-align:middle"><div style="position:relative;height:6px;background:var(--border-color);border-radius:3px;width:120px">'
+        + '<div style="position:absolute;left:0;width:' + pct + '%;height:100%;background:' + bc + ';border-radius:3px;max-width:100%"></div>'
+        + '</div></td></tr>';
+    });
+
+    // funding rows
+    const fundingPairs = [
       ['BTC perp', d.coinalyze_btc_funding],
       ['ETH perp', d.coinalyze_eth_funding],
       ['SOL perp', d.coinalyze_sol_funding],
-    ].map(([label,v]) => `<tr>
-      <td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">${label}</td>
-      <td style="padding:5px 8px">${fmtFunding(v)}</td></tr>`).join('');
+    ];
+    let fundingRows = '';
+    fundingPairs.forEach(function(pair) {
+      fundingRows += '<tr>'
+        + '<td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">' + pair[0] + '</td>'
+        + '<td style="padding:5px 8px">' + fmtFunding(pair[1]) + '</td></tr>';
+    });
 
-    const tvlSolPct = (d.solana_tvl_now!=null&&d.solana_tvl_7d_ago!=null&&d.solana_tvl_7d_ago>0)
-      ? ((d.solana_tvl_now-d.solana_tvl_7d_ago)/d.solana_tvl_7d_ago*100) : null;
-    const tvlSolCls = tvlSolPct==null?'':tvlSolPct>=0?'positive':'negative';
+    // TVL 7d change
+    const tvlSolPct = (d.solana_tvl_now != null && d.solana_tvl_7d_ago != null && d.solana_tvl_7d_ago > 0)
+      ? ((d.solana_tvl_now - d.solana_tvl_7d_ago) / d.solana_tvl_7d_ago * 100) : null;
+    const tvlSolCls = tvlSolPct == null ? '' : tvlSolPct >= 0 ? 'positive' : 'negative';
+    const tvlSolBadge = tvlSolPct != null
+      ? '<div class="stat-meta ' + tvlSolCls + '">' + (tvlSolPct >= 0 ? '+' : '') + tvlSolPct.toFixed(1) + '% 7d</div>'
+      : '';
+    const solEpoch = d.helius_sol_epoch != null ? '<div class="stat-meta">Epoch ' + d.helius_sol_epoch + '</div>' : '';
     const lastUpdated = d.last_updated ? Fmt.ago(d.last_updated) : 'not yet';
+    const lastErr  = d.last_error ? d.last_error.substring(0, 80) : 'None';
 
-    c.innerHTML = `
-      <div class="page-header">
-        <div class="page-header-left">
-          <div class="page-title">SIGNALS</div>
-          <div class="page-subtitle">Alternative data signal layer · updated ${lastUpdated}</div>
-        </div>
-        <div class="page-header-right">
-          <button class="btn btn-ghost btn-sm" onclick="App.renderPage('signals')">↻ Refresh</button>
-        </div>
-      </div>
-      <div class="section-label">COMPOSITE SIGNAL</div>
-      <div style="display:grid;grid-template-columns:220px 1fr;gap:16px;margin-bottom:24px;align-items:start">
-        <div class="stat-card" style="padding:16px;display:flex;align-items:center;justify-content:center">${gauge}</div>
-        <div class="stat-card" style="padding:16px">
-          <div class="section-label" style="margin-bottom:10px">COMPONENT BREAKDOWN</div>
-          <table style="width:100%;border-collapse:collapse">
-            <thead><tr>
-              <th style="text-align:left;padding:4px 8px;font-size:10px;color:var(--text-muted);font-weight:400">SOURCE</th>
-              <th style="text-align:left;padding:4px 8px;font-size:10px;color:var(--text-muted);font-weight:400">SCORE</th>
-              <th style="padding:4px 8px"></th></tr></thead>
-            <tbody>${compRows}</tbody></table></div></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
-        <div class="stat-card" style="padding:16px">
-          <div class="section-label" style="margin-bottom:12px">FEAR &amp; GREED INDEX</div>
-          <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:6px">
-            <span style="font-size:40px;font-weight:600;color:${fgColor};font-family:'IBM Plex Mono',monospace">${fg??'—'}</span>
-            <span style="font-size:13px;color:${fgColor};letter-spacing:1px">${fgLabel}</span></div>
-          ${fg!=null?`<div style="position:relative;height:8px;background:var(--border-color);border-radius:4px">
-            <div style="position:absolute;left:0;width:${fg}%;height:100%;background:${fgColor};border-radius:4px;max-width:100%"></div></div>
-          <div class="stat-meta" style="margin-top:6px;display:flex;justify-content:space-between"><span>0 — Extreme Fear</span><span>100 — Extreme Greed</span></div>`:''}
-        </div>
-        <div class="stat-card" style="padding:16px">
-          <div class="section-label" style="margin-bottom:12px">BTC SENTIMENT (COINGECKO)</div>
-          ${d.coingecko_sentiment!=null?`${(()=>{const rp=((d.coingecko_sentiment+1)/2*100);const bp=rp.toFixed(0);const brp=(100-rp).toFixed(0);const sc=rp>60?'#22c55e':rp<40?'#ef4444':'#f59e0b';return `<div style="font-size:36px;font-weight:600;color:${sc};font-family:'IBM Plex Mono',monospace;margin-bottom:8px">${bp}% <span style="font-size:13px;letter-spacing:1px">BULLISH</span></div><div style="position:relative;height:8px;background:var(--border-color);border-radius:4px"><div style="position:absolute;left:0;width:${bp}%;height:100%;background:${sc};border-radius:4px;max-width:100%"></div></div><div class="stat-meta" style="margin-top:6px;display:flex;justify-content:space-between"><span>▲ ${bp}% Bullish</span><span>▼ ${brp}% Bearish</span></div>`;})()} `:'<div class="stat-meta">No data</div>'}</div></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
-        <div class="stat-card" style="padding:16px">
-          <div class="section-label" style="margin-bottom:12px">KALSHI PREDICTION MARKETS</div>
-          <table style="width:100%;border-collapse:collapse"><tbody>${kalshiRows}</tbody></table>
-          <div class="stat-meta" style="margin-top:10px">CFTC-regulated · Real-money implied probabilities</div></div>
-        <div class="stat-card" style="padding:16px">
-          <div class="section-label" style="margin-bottom:12px">PERPETUAL FUNDING RATES</div>
-          <table style="width:100%;border-collapse:collapse"><tbody>${fundingRows}</tbody></table>
-          <div class="stat-meta" style="margin-top:10px">Source: Coinalyze · 8h rate · positive = longs pay</div></div></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-        <div class="stat-card" style="padding:16px">
-          <div class="section-label" style="margin-bottom:12px">CHAIN TVL (DEFILLAMA)</div>
-          <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">
-            <div><div class="stat-label">SOLANA</div><div class="stat-value">${fmtTvl(d.solana_tvl_now)}</div>${tvlSolPct!=null?`<div class="stat-meta ${tvlSolCls}">${tvlSolPct>=0?'+':''}${tvlSolPct.toFixed(1)}% 7d</div>`:''}</div>
-            <div><div class="stat-label">BASE</div><div class="stat-value">${fmtTvl(d.base_tvl_now)}</div></div></div></div>
-        <div class="stat-card" style="padding:16px">
-          <div class="section-label" style="margin-bottom:12px">MACRO</div>
-          <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">
-            <div><div class="stat-label">SOL INFLATION</div><div class="stat-value">${d.helius_sol_inflation!=null?(d.helius_sol_inflation*100).toFixed(2)+'%':'—'}</div>${d.helius_sol_epoch!=null?`<div class="stat-meta">Epoch ${d.helius_sol_epoch}</div>`:''}</div>
-            <div><div class="stat-label">LAST ERROR</div><div class="stat-meta" style="word-break:break-all">${d.last_error?d.last_error.substring(0,80):'None'}</div></div></div></div></div>`;
+    c.innerHTML = ''
+      + '<div class="page-header">'
+      +   '<div class="page-header-left"><div class="page-title">SIGNALS</div>'
+      +     '<div class="page-subtitle">Alternative data signal layer \u00b7 updated ' + lastUpdated + '</div></div>'
+      +   '<div class="page-header-right">'
+      +     '<button class="btn btn-ghost btn-sm" onclick="App.renderPage(\'signals\')">&#8635; Refresh</button>'
+      +   '</div>'
+      + '</div>'
+
+      + '<div class="section-label">COMPOSITE SIGNAL</div>'
+      + '<div style="display:grid;grid-template-columns:220px 1fr;gap:16px;margin-bottom:24px;align-items:start">'
+      +   '<div class="stat-card" style="padding:16px;display:flex;align-items:center;justify-content:center">' + gauge + '</div>'
+      +   '<div class="stat-card" style="padding:16px">'
+      +     '<div class="section-label" style="margin-bottom:10px">COMPONENT BREAKDOWN</div>'
+      +     '<table style="width:100%;border-collapse:collapse"><thead><tr>'
+      +       '<th style="text-align:left;padding:4px 8px;font-size:10px;color:var(--text-muted);font-weight:400">SOURCE</th>'
+      +       '<th style="text-align:left;padding:4px 8px;font-size:10px;color:var(--text-muted);font-weight:400">SCORE</th>'
+      +       '<th style="padding:4px 8px"></th></tr></thead>'
+      +     '<tbody>' + compRows + '</tbody></table>'
+      +   '</div>'
+      + '</div>'
+
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">'
+      +   '<div class="stat-card" style="padding:16px">'
+      +     '<div class="section-label" style="margin-bottom:12px">FEAR &amp; GREED INDEX</div>'
+      +     '<div style="display:flex;align-items:baseline;gap:12px;margin-bottom:6px">'
+      +       '<span style="font-size:40px;font-weight:600;color:' + fgColor + ';font-family:\'IBM Plex Mono\',monospace">' + (fg != null ? fg : '\u2014') + '</span>'
+      +       '<span style="font-size:13px;color:' + fgColor + ';letter-spacing:1px">' + fgLabel + '</span>'
+      +     '</div>' + fgBar
+      +   '</div>'
+      +   '<div class="stat-card" style="padding:16px">'
+      +     '<div class="section-label" style="margin-bottom:12px">BTC SENTIMENT (COINGECKO)</div>'
+      +     cgHtml
+      +   '</div>'
+      + '</div>'
+
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">'
+      +   '<div class="stat-card" style="padding:16px">'
+      +     '<div class="section-label" style="margin-bottom:12px">KALSHI PREDICTION MARKETS</div>'
+      +     '<table style="width:100%;border-collapse:collapse"><tbody>' + kalshiRows + '</tbody></table>'
+      +     '<div class="stat-meta" style="margin-top:10px">CFTC-regulated \u00b7 Real-money implied probabilities</div>'
+      +   '</div>'
+      +   '<div class="stat-card" style="padding:16px">'
+      +     '<div class="section-label" style="margin-bottom:12px">PERPETUAL FUNDING RATES</div>'
+      +     '<table style="width:100%;border-collapse:collapse"><tbody>' + fundingRows + '</tbody></table>'
+      +     '<div class="stat-meta" style="margin-top:10px">Source: Coinalyze \u00b7 8h rate \u00b7 positive = longs pay</div>'
+      +   '</div>'
+      + '</div>'
+
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">'
+      +   '<div class="stat-card" style="padding:16px">'
+      +     '<div class="section-label" style="margin-bottom:12px">CHAIN TVL (DEFILLAMA)</div>'
+      +     '<div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">'
+      +       '<div><div class="stat-label">SOLANA</div><div class="stat-value">' + fmtTvl(d.solana_tvl_now) + '</div>' + tvlSolBadge + '</div>'
+      +       '<div><div class="stat-label">BASE</div><div class="stat-value">' + fmtTvl(d.base_tvl_now) + '</div></div>'
+      +     '</div>'
+      +   '</div>'
+      +   '<div class="stat-card" style="padding:16px">'
+      +     '<div class="section-label" style="margin-bottom:12px">MACRO</div>'
+      +     '<div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">'
+      +       '<div><div class="stat-label">SOL INFLATION</div>'
+      +         '<div class="stat-value">' + (d.helius_sol_inflation != null ? (d.helius_sol_inflation * 100).toFixed(2) + '%' : '\u2014') + '</div>'
+      +         solEpoch + '</div>'
+      +       '<div><div class="stat-label">LAST ERROR</div>'
+      +         '<div class="stat-meta" style="word-break:break-all">' + lastErr + '</div></div>'
+      +     '</div>'
+      +   '</div>'
+      + '</div>';
   },
 
 
