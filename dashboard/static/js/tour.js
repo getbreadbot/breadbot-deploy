@@ -4,7 +4,7 @@
 // Fires once on first visit. Persists via localStorage + POST /api/tour-complete.
 // All steps target sidebar nav items so no page-switching is required.
 
-const TOUR_KEY = 'bb_tour_v1_complete';
+const TOUR_KEY = 'bb_tour_v2_complete';
 
 const TourSystem = {
   driver: null,
@@ -57,7 +57,21 @@ const TourSystem = {
           },
         },
         {
-          // Step 2 — Alert Feed
+          // Step 2 — Composite Signal card (Overview page)
+          element: '[title="Click to open Signals page"]',
+          popover: {
+            title: '◉ Composite Signal',
+            description:
+              'This card shows the live composite signal score — a weighted ' +
+              'reading from Fear & Greed, Kalshi prediction markets, and funding ' +
+              'rates. When it drops below -50, trading pauses automatically. ' +
+              'Click it any time to open the full Signals page.',
+            side: 'bottom',
+            align: 'start',
+          },
+        },
+        {
+          // Step 3 — Alert Feed
           element: '[data-page="alerts"]',
           popover: {
             title: '◈ Alert Feed',
@@ -70,7 +84,7 @@ const TourSystem = {
           },
         },
         {
-          // Step 3 — Yields
+          // Step 4 — Yields
           element: '[data-page="yields"]',
           popover: {
             title: '◇ Yields',
@@ -82,7 +96,33 @@ const TourSystem = {
           },
         },
         {
-          // Step 4 — Signals
+          // Step 5 — Flash Loans
+          element: '[data-page="flashloans"]',
+          popover: {
+            title: '⚡ Flash Loans',
+            description:
+              'Monitor and manage flash loan arbitrage activity on Base. ' +
+              'Tracks your deployed contract, successful executions, profit, ' +
+              'and success rate in real time.',
+            side: 'right',
+            align: 'start',
+          },
+        },
+        {
+          // Step 6 — Analytics
+          element: '[data-page="analytics"]',
+          popover: {
+            title: '📊 Analytics',
+            description:
+              'Historical performance charts — P&L over time, scanner alert ' +
+              'volume, security score distribution, and yield trends. Use this ' +
+              'to review how the bot is performing over days and weeks.',
+            side: 'right',
+            align: 'start',
+          },
+        },
+        {
+          // Step 7 — Signals
           element: '[data-page="signals"]',
           popover: {
             title: '◉ Signals',
@@ -95,7 +135,7 @@ const TourSystem = {
           },
         },
         {
-          // Step 5 — Research
+          // Step 8 — Research
           element: '[data-page="research"]',
           popover: {
             title: '🔍 Research',
@@ -107,14 +147,15 @@ const TourSystem = {
           },
         },
         {
-          // Step 6 — Controls
+          // Step 9 — Controls
           element: '[data-page="controls"]',
           popover: {
             title: '⊕ Controls',
             description:
               'Pause or resume trading, adjust your risk settings, and manage ' +
-              'your exchange API connections. The circuit breaker lives here too — ' +
-              'it auto-pauses if you hit your daily loss limit.',
+              'your exchange API connections. The circuit breaker lives here — ' +
+              'it auto-pauses if you hit your daily loss limit. Toggle auto-execution ' +
+              'mode any time via Telegram: send /automode on or /automode off.',
             side: 'right',
             align: 'start',
           },
@@ -130,7 +171,7 @@ const TourSystem = {
     fetch('/api/tour-complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tour: 'welcome_v1', ts: Date.now() }),
+      body: JSON.stringify({ tour: 'welcome_v2', ts: Date.now() }),
     }).catch(() => {}); // non-blocking
   },
 
