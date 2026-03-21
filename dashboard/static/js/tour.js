@@ -10,7 +10,7 @@ const TourSystem = {
   driver: null,
 
   init() {
-    if (typeof window.driver === 'undefined') {
+    if (typeof window.driver === 'undefined' || typeof window.driver.js === 'undefined' || typeof window.driver.js.driver !== 'function') {
       console.warn('[TourSystem] Driver.js not loaded — tour disabled.');
       return;
     }
@@ -20,7 +20,7 @@ const TourSystem = {
   },
 
   _launch() {
-    const { driver } = window;
+    const { driver } = window.driver.js;
 
     this.driver = driver({
       animate: true,
@@ -82,7 +82,20 @@ const TourSystem = {
           },
         },
         {
-          // Step 4 — Research
+          // Step 4 — Signals
+          element: '[data-page="signals"]',
+          popover: {
+            title: '◉ Signals',
+            description:
+              'Live alternative data — Fear & Greed index, Kalshi prediction market ' +
+              'probabilities, perpetual funding rates, and a composite signal score ' +
+              'that adjusts position sizing automatically.',
+            side: 'right',
+            align: 'start',
+          },
+        },
+        {
+          // Step 5 — Research
           element: '[data-page="research"]',
           popover: {
             title: '🔍 Research',
@@ -94,7 +107,7 @@ const TourSystem = {
           },
         },
         {
-          // Step 5 — Controls
+          // Step 6 — Controls
           element: '[data-page="controls"]',
           popover: {
             title: '⊕ Controls',
