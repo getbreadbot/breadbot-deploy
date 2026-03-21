@@ -16,7 +16,7 @@ const TourSystem = {
     }
     if (localStorage.getItem(TOUR_KEY)) return; // already seen
     // Small delay so the dashboard finishes rendering
-    setTimeout(() => this._launch(), 1200);
+    setTimeout(() => this._launch(), 3000);
   },
 
   _launch() {
@@ -177,8 +177,12 @@ const TourSystem = {
 
   // Allow replaying from the sidebar footer link
   replay() {
+    if (this.driver) {
+      try { this.driver.destroy(); } catch(e) {}
+      this.driver = null;
+    }
     localStorage.removeItem(TOUR_KEY);
-    this._launch();
+    setTimeout(() => this._launch(), 200);
   },
 };
 
