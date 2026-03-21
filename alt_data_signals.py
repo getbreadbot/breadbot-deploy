@@ -103,6 +103,32 @@ def get_cached_recession_prob() -> Optional[float]:
     """Return Kalshi recession probability 0.0..1.0, or None if disabled."""
     return _cache["recession_prob"]
 
+def get_cached_signals() -> dict:
+    """Return a snapshot of the current alt-data cache for the dashboard API."""
+    return {
+        "composite":             _cache.get("composite"),
+        "composite_components":  _cache.get("composite_components", {}),
+        "fear_greed":            _cache.get("fear_greed"),
+        "fg_label":              _cache.get("fg_label"),
+        "coingecko_sentiment":   _cache.get("coingecko_sentiment"),
+        "kalshi_btc_prob":       _cache.get("kalshi_btc_prob"),
+        "kalshi_eth_prob":       _cache.get("kalshi_eth_prob"),
+        "kalshi_sol_prob":       _cache.get("kalshi_sol_prob"),
+        "recession_prob":        _cache.get("recession_prob"),
+        "coinalyze_btc_funding": _cache.get("coinalyze_btc_funding"),
+        "coinalyze_eth_funding": _cache.get("coinalyze_eth_funding"),
+        "coinalyze_sol_funding": _cache.get("coinalyze_sol_funding"),
+        "coinalyze_btc_oi":      _cache.get("coinalyze_btc_oi"),
+        "coinalyze_eth_oi":      _cache.get("coinalyze_eth_oi"),
+        "solana_tvl_now":        _cache.get("solana_tvl_now"),
+        "solana_tvl_7d_ago":     _cache.get("solana_tvl_7d_ago"),
+        "base_tvl_now":          _cache.get("base_tvl_now"),
+        "helius_sol_inflation":  _cache.get("helius_sol_inflation"),
+        "helius_sol_epoch":      _cache.get("helius_sol_epoch"),
+        "last_updated":          _cache.get("last_updated"),
+        "last_error":            _cache.get("last_error"),
+    }
+
 # ── DB ───────────────────────────────────────────────────────────────────────
 
 def ensure_alt_data_table() -> None:

@@ -32,6 +32,11 @@ import uvicorn
 DB_PATH = Path(__file__).parent.parent / "data" / "cryptobot.db"
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+try:
+    from alt_data_signals import get_cached_signals as _get_signals
+except ImportError:
+    _get_signals = None
+
 # ── Wallet addresses ─────────────────────────────────────────────────────────
 BASE_WALLET = "0x9EaC5E219d6a4Be6Ab539d0BDE954dDd4c20B924"
 SOLANA_WALLET = "6LW6H6GguLQm7u1wzNaCtvy1sqjhoHxwQhSBV1ynPHy8"
@@ -456,6 +461,137 @@ def api_stats():
     finally:
         conn.close()
 
+
+
+
+# ── GET: Alt Data Signals ─────────────────────────────────────────────────────
+
+@app.get("/api/signals")
+def api_signals():
+    """Read latest alt-data signals from DB and return structured payload for dashboard."""
+    conn = get_db()
+    if not conn:
+        return JSONResponse({"error": "no db"})
+    try:
+        # Pull latest value per (source, signal_type, market_id)
+        rows = conn.execute("""
+            SELECT source, signal_type, market_id, description, value, value_shift, composite_score, timestamp
+            FROM alt_data_signals s1
+            WHERE timestamp = (
+                SELECT MAX(timestamp) FROM alt_data_signals s2
+                WHERE s2.source=s1.source AND s2.signal_type=s1.signal_type
+                  AND s2.market_id IS s1.market_id
+            )
+            ORDER BY timestamp DESC
+        """).fetchall()
+
+        # Build lookup: (source, signal_type, market_id) -> value
+        def v(src, st, mid=""):
+            for r in rows:
+                if r["source"]==src and r["signal_type"]==st and (r["market_id"] or "")==mid:
+                    return r["value"]
+            return None
+
+        def ts(src):
+            for r in rows:
+                if r["source"]==src:
+                    return r["timestamp"]
+            return None
+
+        # Latest composite score
+        comp = v("composite", "score")
+        comp_row = next((r for r in rows if r["source"]=="composite"), None)
+
+        # Fear & Greed label
+        fg = v("fear_greed", "index")
+        fg_int = int(fg) if fg is not None else None
+        if fg_int is None:
+            fg_label = None
+        elif fg_int <= 25:
+            fg_label = "Extreme Fear"
+        elif fg_int <= 45:
+            fg_label = "Fear"
+        elif fg_int <= 55:
+            fg_label = "Neutral"
+        elif fg_int <= 75:
+            fg_label = "Greed"
+        else:
+            fg_label = "Extreme Greed"
+
+        # Composite components: reconstruct from last poll cycle
+        # We approximate by pulling all rows from the same minute as composite
+        components = {}
+        if comp_row:
+            comp_ts_prefix = comp_row["timestamp"][:16]  # "YYYY-MM-DD HH:MM"
+            cycle_rows = conn.execute("""
+                SELECT source, signal_type, market_id, value
+                FROM alt_data_signals
+                WHERE timestamp LIKE ?
+                ORDER BY timestamp DESC
+            """, (comp_ts_prefix + "%",)).fetchall()
+
+            fg_v = next((r["value"] for r in cycle_rows if r["source"]=="fear_greed"), None)
+            if fg_v is not None:
+                components["Fear & Greed"] = round((fg_v - 50) * 2, 1)
+
+            cg_v = next((r["value"] for r in cycle_rows if r["source"]=="coingecko"), None)
+            if cg_v is not None:
+                components["BTC Sentiment"] = round(cg_v * 100, 1)
+
+            sol_tvl_rows = [r for r in cycle_rows if r["source"]=="defillama" and r["market_id"]=="solana"]
+            # TVL trend needs current + 7d — approximate from value_shift stored
+            # Use funding rate as proxy component
+            btc_fr = next((r["value"] for r in cycle_rows if r["source"]=="coinalyze" and r["signal_type"]=="funding" and "BTC" in (r["market_id"] or "")), None)
+            eth_fr = next((r["value"] for r in cycle_rows if r["source"]=="coinalyze" and r["signal_type"]=="funding" and "ETH" in (r["market_id"] or "")), None)
+            if btc_fr is not None and eth_fr is not None:
+                avg_fr = (btc_fr + eth_fr) / 2
+                components["Funding Rate"] = round(max(-100.0, min(100.0, -(avg_fr / 0.0003) * 100.0)), 1)
+
+            kx_btc = next((r["value"] for r in cycle_rows if r["source"]=="kalshi" and r["market_id"]=="KXBTC"), None)
+            kx_eth = next((r["value"] for r in cycle_rows if r["source"]=="kalshi" and r["market_id"]=="KXETH"), None)
+            kalshi_vals = [x for x in [kx_btc, kx_eth] if x is not None]
+            if kalshi_vals:
+                avg_prob = sum(kalshi_vals) / len(kalshi_vals)
+                components["Kalshi crypto avg"] = round((avg_prob - 0.5) * 200, 1)
+
+        # TVL 7d change — stored as value_shift on defillama rows
+        sol_tvl_row = next((r for r in rows if r["source"]=="defillama" and r["market_id"]=="solana"), None)
+        base_tvl_row = next((r for r in rows if r["source"]=="defillama" and r["market_id"]=="base"), None)
+        sol_tvl_now = sol_tvl_row["value"] if sol_tvl_row else None
+        sol_tvl_7d = (sol_tvl_now - sol_tvl_row["value_shift"]) if (sol_tvl_row and sol_tvl_row["value_shift"] is not None) else None
+        base_tvl_now = base_tvl_row["value"] if base_tvl_row else None
+
+        # Last updated = most recent timestamp in table
+        last_ts_row = conn.execute("SELECT MAX(timestamp) as t FROM alt_data_signals").fetchone()
+        last_updated = last_ts_row["t"] if last_ts_row else None
+
+        return JSONResponse({
+            "composite":             round(comp, 1) if comp is not None else None,
+            "composite_components":  components,
+            "fear_greed":            fg_int,
+            "fg_label":              fg_label,
+            "coingecko_sentiment":   v("coingecko", "sentiment"),
+            "kalshi_btc_prob":       v("kalshi", "prediction", "KXBTC"),
+            "kalshi_eth_prob":       v("kalshi", "prediction", "KXETH"),
+            "kalshi_sol_prob":       v("kalshi", "prediction", "KXSOL"),
+            "recession_prob":        v("kalshi", "prediction", "KXRECESSION"),
+            "coinalyze_btc_funding": v("coinalyze", "funding", "BTCUSDT_PERP.A"),
+            "coinalyze_eth_funding": v("coinalyze", "funding", "ETHUSDT_PERP.A"),
+            "coinalyze_sol_funding": v("coinalyze", "funding", "SOLUSDT_PERP.A"),
+            "coinalyze_btc_oi":      v("coinalyze", "open_interest", "BTCUSDT_PERP.A"),
+            "coinalyze_eth_oi":      v("coinalyze", "open_interest", "ETHUSDT_PERP.A"),
+            "solana_tvl_now":        sol_tvl_now,
+            "solana_tvl_7d_ago":     sol_tvl_7d,
+            "base_tvl_now":          base_tvl_now,
+            "helius_sol_inflation":  v("helius", "macro", "sol_inflation"),
+            "helius_sol_epoch":      None,
+            "last_updated":          last_updated,
+            "last_error":            None,
+        })
+    except Exception as exc:
+        return JSONResponse({"error": str(exc)})
+    finally:
+        conn.close()
 
 # ── TASK 9: Ensure flash_loans table on startup ──────────────────────────────
 

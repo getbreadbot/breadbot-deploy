@@ -194,7 +194,7 @@ async function resetDaily(btn) {
 const App = {
   currentPage: 'overview', refreshInterval: 30,
   refreshTimer: null, countdownTimer: null, countdown: 30,
-  pages: ['overview','positions','alerts','yields','trades','flashloans','analytics','research','controls'],
+  pages: ['overview','positions','alerts','yields','signals','trades','flashloans','analytics','research','controls'],
 
   pendingAlertCount: 0,
 
@@ -270,6 +270,7 @@ const App = {
         case 'trades':     await Pages.trades(c);     break;
         case 'flashloans': await Pages.flashloans(c); break;
         case 'analytics':  await Pages.analytics(c);  break;
+        case 'signals':    await Pages.signals(c);    break;
         case 'research':   await Pages.research(c);   break;
         case 'controls':   await Pages.controls(c);   break;
       }
@@ -345,11 +346,12 @@ const Pages = {
 
   // ── Overview ─────────────────────────────────────────────────────────────
   async overview(c) {
-    const [d, tradeData, balData, flData] = await Promise.all([
+    const [d, tradeData, balData, flData, sigData] = await Promise.all([
       API.get('/api/status'),
       API.get('/api/trades').catch(()=>({trades:[],cumulative_pnl:[]})),
       API.get('/api/balances').catch(()=>({})),
       API.get('/api/flashloans').catch(()=>({summary:{}})),
+      API.get('/api/signals').catch(()=>({})),
     ]);
     App.setStatusBadge(d.trading_active);
     App.updateNotifyBar();
@@ -398,6 +400,10 @@ const Pages = {
           <div class="stat-value">${d.alerts_today??'—'}</div></div>
         <div class="stat-card"><div class="stat-label">BUYS TODAY</div>
           <div class="stat-value positive">${d.buys_today??'—'}</div></div>
+        <div class="stat-card" style="cursor:pointer" onclick="App.navigate('signals')" title="Click to open Signals page">
+          <div class="stat-label">COMPOSITE SIGNAL <span style="font-size:9px;color:var(--text-muted)">↗ SIGNALS</span></div>
+          <div class="stat-value ${sigData && sigData.composite!=null ? (sigData.composite>10?'positive':sigData.composite<-10?'negative':'amber') : ''}">${sigData && sigData.composite!=null ? (sigData.composite>0?'+':'')+sigData.composite.toFixed(1) : '—'}</div>
+          <div class="stat-meta">${sigData && sigData.fg_label ? 'F&G: '+sigData.fear_greed+' · '+(sigData.fg_label||'') : ''}</div></div>
         <div class="stat-card"><div class="stat-label">LAST SCAN</div>
           <div class="stat-value" style="font-size:14px">${Fmt.ago(d.last_scan)}</div>
           <div class="stat-meta">${d.last_scan?Fmt.datetime(d.last_scan):'—'}</div></div>
@@ -1314,6 +1320,151 @@ const Pages = {
     if (mp.length > 0) {
       Charts.monthlyPnlBar('monthly-pnl-chart', mp.map(m=>m.month), mp.map(m=>m.pnl));
     }
+  },
+
+
+
+
+  // ── Signals ───────────────────────────────────────────────────────────────
+  async signals(c) {
+    const d = await API.get('/api/signals').catch(() => ({}));
+
+    const sigClass = v => v == null ? '' : v > 10 ? 'positive' : v < -10 ? 'negative' : 'amber';
+    const fmtTvl = v => v != null ? '$' + (v / 1e9).toFixed(2) + 'B' : '—';
+    const fmtFunding = v => {
+      if (v == null) return '<span class="td-muted">—</span>';
+      const cls = v > 0 ? 'positive' : v < 0 ? 'negative' : '';
+      const sign = v > 0 ? '+' : '';
+      const ann = (v * 3 * 365 * 100).toFixed(1);
+      return `<span class="${cls}">${sign}${(v*100).toFixed(4)}% <span class="td-muted">(${sign}${ann}%/yr)</span></span>`;
+    };
+
+    const comp = d.composite;
+    const compColor = comp == null ? '#6b7280' : comp > 10 ? '#22c55e' : comp < -10 ? '#ef4444' : '#f59e0b';
+    const compLabel = comp == null ? 'NO DATA' : comp > 30 ? 'BULLISH' : comp < -30 ? 'BEARISH' : 'NEUTRAL';
+    const toRad = deg => deg * Math.PI / 180;
+    const cx=100,cy=105,r=78,startAng=-225,totalAng=270;
+    const arcPath = (sd, sw) => {
+      if(Math.abs(sw)<0.01) return '';
+      const x1=cx+r*Math.cos(toRad(sd)),y1=cy+r*Math.sin(toRad(sd));
+      const x2=cx+r*Math.cos(toRad(sd+sw)),y2=cy+r*Math.sin(toRad(sd+sw));
+      return `M ${x1.toFixed(2)} ${y1.toFixed(2)} A ${r} ${r} 0 ${Math.abs(sw)>180?1:0} 1 ${x2.toFixed(2)} ${y2.toFixed(2)}`;
+    };
+    const fillAng = comp!=null ? ((comp+100)/200)*totalAng : 0;
+    const gauge = `<svg viewBox="0 0 200 160" width="200" height="160" style="display:block;margin:0 auto">
+      <path d="${arcPath(startAng,totalAng)}" fill="none" stroke="var(--border-color)" stroke-width="12" stroke-linecap="round"/>
+      ${comp!=null?`<path d="${arcPath(startAng,fillAng)}" fill="none" stroke="${compColor}" stroke-width="12" stroke-linecap="round" style="filter:drop-shadow(0 0 4px ${compColor}88)"/>`:''}
+      <text x="${cx}" y="${cy-8}" text-anchor="middle" fill="${compColor}" font-size="32" font-weight="600" font-family="IBM Plex Mono,monospace">${comp!=null?(comp>0?'+':'')+comp.toFixed(1):'—'}</text>
+      <text x="${cx}" y="${cy+14}" text-anchor="middle" fill="${compColor}" font-size="11" font-family="IBM Plex Mono,monospace" letter-spacing="2">${compLabel}</text>
+      <text x="${cx-r-4}" y="${cy+28}" text-anchor="middle" fill="var(--text-muted)" font-size="9" font-family="IBM Plex Mono,monospace">-100</text>
+      <text x="${cx+r+4}" y="${cy+28}" text-anchor="middle" fill="var(--text-muted)" font-size="9" font-family="IBM Plex Mono,monospace">+100</text>
+    </svg>`;
+
+    const components = d.composite_components || {};
+    const compRows = Object.keys(components).length
+      ? Object.entries(components).map(([k,v]) => {
+          const barColor = v>10?'#22c55e':v<-10?'#ef4444':'#f59e0b';
+          const leftPct = v>=0?50:((v+100)/200*100).toFixed(0);
+          const widthPct = (Math.abs(v)/2).toFixed(0);
+          return `<tr>
+            <td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">${k}</td>
+            <td class="td-mono ${sigClass(v)}" style="padding:5px 8px">${(v>0?'+':'')+v.toFixed(1)}</td>
+            <td style="padding:5px 8px;vertical-align:middle">
+              <div style="position:relative;height:6px;background:var(--border-color);border-radius:3px;width:120px">
+                <div style="position:absolute;left:${leftPct}%;width:${widthPct}%;height:100%;background:${barColor};border-radius:3px"></div>
+              </div></td></tr>`;
+        }).join('')
+      : `<tr><td colspan="3" class="td-muted" style="padding:12px">Waiting for first poll cycle</td></tr>`;
+
+    const fg = d.fear_greed;
+    const fgLabel = d.fg_label || (fg!=null?(fg<=25?'Extreme Fear':fg<=45?'Fear':fg<=55?'Neutral':fg<=75?'Greed':'Extreme Greed'):'');
+    const fgColor = fg==null?'#6b7280':fg<=25?'#ef4444':fg<=45?'#f97316':fg<=55?'#f59e0b':fg<=75?'#84cc16':'#22c55e';
+
+    const kalshiRows = [
+      ['BTC price contract', d.kalshi_btc_prob],
+      ['ETH price contract', d.kalshi_eth_prob],
+      ['SOL price contract', d.kalshi_sol_prob],
+      ['Recession probability', d.recession_prob],
+    ].map(([label,v]) => {
+      if(v==null) return `<tr><td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">${label}</td><td class="td-muted" style="padding:5px 8px">no open market</td><td></td></tr>`;
+      const pct=Math.round(v*100);
+      const bc=pct>60?'#22c55e':pct<40?'#ef4444':'#f59e0b';
+      return `<tr>
+        <td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">${label}</td>
+        <td class="td-mono" style="color:${bc};font-weight:500;padding:5px 8px">${pct}%</td>
+        <td style="padding:5px 8px;vertical-align:middle">
+          <div style="position:relative;height:6px;background:var(--border-color);border-radius:3px;width:120px">
+            <div style="position:absolute;left:0;width:${pct}%;height:100%;background:${bc};border-radius:3px;max-width:100%"></div>
+          </div></td></tr>`;
+    }).join('');
+
+    const fundingRows = [
+      ['BTC perp', d.coinalyze_btc_funding],
+      ['ETH perp', d.coinalyze_eth_funding],
+      ['SOL perp', d.coinalyze_sol_funding],
+    ].map(([label,v]) => `<tr>
+      <td class="td-mono" style="color:var(--text-secondary);padding:5px 8px">${label}</td>
+      <td style="padding:5px 8px">${fmtFunding(v)}</td></tr>`).join('');
+
+    const tvlSolPct = (d.solana_tvl_now!=null&&d.solana_tvl_7d_ago!=null&&d.solana_tvl_7d_ago>0)
+      ? ((d.solana_tvl_now-d.solana_tvl_7d_ago)/d.solana_tvl_7d_ago*100) : null;
+    const tvlSolCls = tvlSolPct==null?'':tvlSolPct>=0?'positive':'negative';
+    const lastUpdated = d.last_updated ? Fmt.ago(d.last_updated) : 'not yet';
+
+    c.innerHTML = `
+      <div class="page-header">
+        <div class="page-header-left">
+          <div class="page-title">SIGNALS</div>
+          <div class="page-subtitle">Alternative data signal layer · updated ${lastUpdated}</div>
+        </div>
+        <div class="page-header-right">
+          <button class="btn btn-ghost btn-sm" onclick="App.renderPage('signals')">↻ Refresh</button>
+        </div>
+      </div>
+      <div class="section-label">COMPOSITE SIGNAL</div>
+      <div style="display:grid;grid-template-columns:220px 1fr;gap:16px;margin-bottom:24px;align-items:start">
+        <div class="stat-card" style="padding:16px;display:flex;align-items:center;justify-content:center">${gauge}</div>
+        <div class="stat-card" style="padding:16px">
+          <div class="section-label" style="margin-bottom:10px">COMPONENT BREAKDOWN</div>
+          <table style="width:100%;border-collapse:collapse">
+            <thead><tr>
+              <th style="text-align:left;padding:4px 8px;font-size:10px;color:var(--text-muted);font-weight:400">SOURCE</th>
+              <th style="text-align:left;padding:4px 8px;font-size:10px;color:var(--text-muted);font-weight:400">SCORE</th>
+              <th style="padding:4px 8px"></th></tr></thead>
+            <tbody>${compRows}</tbody></table></div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+        <div class="stat-card" style="padding:16px">
+          <div class="section-label" style="margin-bottom:12px">FEAR &amp; GREED INDEX</div>
+          <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:6px">
+            <span style="font-size:40px;font-weight:600;color:${fgColor};font-family:'IBM Plex Mono',monospace">${fg??'—'}</span>
+            <span style="font-size:13px;color:${fgColor};letter-spacing:1px">${fgLabel}</span></div>
+          ${fg!=null?`<div style="position:relative;height:8px;background:var(--border-color);border-radius:4px">
+            <div style="position:absolute;left:0;width:${fg}%;height:100%;background:${fgColor};border-radius:4px;max-width:100%"></div></div>
+          <div class="stat-meta" style="margin-top:6px;display:flex;justify-content:space-between"><span>0 — Extreme Fear</span><span>100 — Extreme Greed</span></div>`:''}
+        </div>
+        <div class="stat-card" style="padding:16px">
+          <div class="section-label" style="margin-bottom:12px">BTC SENTIMENT (COINGECKO)</div>
+          ${d.coingecko_sentiment!=null?`${(()=>{const rp=((d.coingecko_sentiment+1)/2*100);const bp=rp.toFixed(0);const brp=(100-rp).toFixed(0);const sc=rp>60?'#22c55e':rp<40?'#ef4444':'#f59e0b';return `<div style="font-size:36px;font-weight:600;color:${sc};font-family:'IBM Plex Mono',monospace;margin-bottom:8px">${bp}% <span style="font-size:13px;letter-spacing:1px">BULLISH</span></div><div style="position:relative;height:8px;background:var(--border-color);border-radius:4px"><div style="position:absolute;left:0;width:${bp}%;height:100%;background:${sc};border-radius:4px;max-width:100%"></div></div><div class="stat-meta" style="margin-top:6px;display:flex;justify-content:space-between"><span>▲ ${bp}% Bullish</span><span>▼ ${brp}% Bearish</span></div>`;})()} `:'<div class="stat-meta">No data</div>'}</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:24px">
+        <div class="stat-card" style="padding:16px">
+          <div class="section-label" style="margin-bottom:12px">KALSHI PREDICTION MARKETS</div>
+          <table style="width:100%;border-collapse:collapse"><tbody>${kalshiRows}</tbody></table>
+          <div class="stat-meta" style="margin-top:10px">CFTC-regulated · Real-money implied probabilities</div></div>
+        <div class="stat-card" style="padding:16px">
+          <div class="section-label" style="margin-bottom:12px">PERPETUAL FUNDING RATES</div>
+          <table style="width:100%;border-collapse:collapse"><tbody>${fundingRows}</tbody></table>
+          <div class="stat-meta" style="margin-top:10px">Source: Coinalyze · 8h rate · positive = longs pay</div></div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+        <div class="stat-card" style="padding:16px">
+          <div class="section-label" style="margin-bottom:12px">CHAIN TVL (DEFILLAMA)</div>
+          <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">
+            <div><div class="stat-label">SOLANA</div><div class="stat-value">${fmtTvl(d.solana_tvl_now)}</div>${tvlSolPct!=null?`<div class="stat-meta ${tvlSolCls}">${tvlSolPct>=0?'+':''}${tvlSolPct.toFixed(1)}% 7d</div>`:''}</div>
+            <div><div class="stat-label">BASE</div><div class="stat-value">${fmtTvl(d.base_tvl_now)}</div></div></div></div>
+        <div class="stat-card" style="padding:16px">
+          <div class="section-label" style="margin-bottom:12px">MACRO</div>
+          <div class="stat-grid" style="grid-template-columns:1fr 1fr;gap:8px">
+            <div><div class="stat-label">SOL INFLATION</div><div class="stat-value">${d.helius_sol_inflation!=null?(d.helius_sol_inflation*100).toFixed(2)+'%':'—'}</div>${d.helius_sol_epoch!=null?`<div class="stat-meta">Epoch ${d.helius_sol_epoch}</div>`:''}</div>
+            <div><div class="stat-label">LAST ERROR</div><div class="stat-meta" style="word-break:break-all">${d.last_error?d.last_error.substring(0,80):'None'}</div></div></div></div></div>`;
   },
 
 
