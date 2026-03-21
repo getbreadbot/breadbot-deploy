@@ -26,7 +26,7 @@ const TourSystem = {
       animate: true,
       smoothScroll: true,
       allowClose: true,
-      overlayOpacity: 0.55,
+      overlayOpacity: 0.85,
       stagePadding: 6,
       stageRadius: 6,
       popoverOffset: 10,

@@ -176,3 +176,74 @@
 .driver-popover-arrow-side-right.driver-popover-arrow {
   border-left-color: #2a2d35 !important;
 }
+
+
+/* ── Driver.js tour overlay — prevent text bleed-through ───────────────────── */
+.driver-active *:not(.driver-popover):not(.driver-popover *):not(.driver-active-element):not(.driver-active-element *) {
+  color: transparent !important;
+  text-shadow: none !important;
+}
+.driver-active .driver-active-element,
+.driver-active .driver-active-element * {
+  color: inherit !important;
+}
+.driver-popover {
+  background: #1a1d23 !important;
+  border: 1px solid rgba(245, 158, 11, 0.25) !important;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.6) !important;
+}
+.driver-popover-title {
+  color: #f59e0b !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 13px !important;
+  letter-spacing: 1px !important;
+  text-transform: uppercase !important;
+}
+.driver-popover-description {
+  color: #b0b3bb !important;
+  font-family: 'DM Sans', sans-serif !important;
+  font-size: 13px !important;
+  line-height: 1.6 !important;
+}
+.driver-popover-navigation-btns button {
+  background: transparent !important;
+  border: 1px solid rgba(245, 158, 11, 0.4) !important;
+  color: #f59e0b !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 11px !important;
+  padding: 5px 14px !important;
+  border-radius: 3px !important;
+  cursor: pointer !important;
+}
+.driver-popover-navigation-btns button:hover {
+  background: rgba(245, 158, 11, 0.12) !important;
+}
+.driver-popover-progress-text {
+  color: #5a5d65 !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 10px !important;
+}
+.driver-popover-close-btn {
+  color: #5a5d65 !important;
+  font-size: 16px !important;
+}
+.driver-popover-close-btn:hover {
+  color: #f59e0b !important;
+}
+
+/* Driver.js button specificity override */
+.driver-active .driver-popover .driver-popover-navigation-btns button,
+.driver-active .driver-popover button.driver-popover-next-btn,
+.driver-active .driver-popover button.driver-popover-prev-btn {
+  background: transparent !important;
+  border: 1px solid rgba(245, 158, 11, 0.45) !important;
+  color: #f59e0b !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: 11px !important;
+  letter-spacing: 0.5px !important;
+  border-radius: 3px !important;
+}
+.driver-active .driver-popover button.driver-popover-next-btn:hover,
+.driver-active .driver-popover button.driver-popover-prev-btn:hover {
+  background: rgba(245, 158, 11, 0.1) !important;
+}
