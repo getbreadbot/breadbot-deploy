@@ -305,17 +305,28 @@ async def check_token_security(
         score -= points
         flags.append(label)
 
+    def bonus(points: int, label: str) -> None:
+        nonlocal score
+        score += points
+        flags.append(f"+{points} {label}")
+
     # Honeypot — most severe risk
     if str(info.get("is_honeypot", "0")) == "1":
         deduct(40, "Honeypot detected")
 
-    # Sell tax
+    # Sell tax — gradient scoring
     try:
         st = float(info.get("sell_tax") or 0)
         if st > 0.10:
             deduct(30, f"Sell tax {st*100:.1f}%")
         elif st > 0.05:
             deduct(15, f"Sell tax {st*100:.1f}%")
+        elif st > 0.01:
+            pass  # 1–5%: neutral
+        elif st == 0:
+            bonus(2, "Zero sell tax")
+        else:
+            bonus(1, f"Low sell tax {st*100:.1f}%")
     except (ValueError, TypeError):
         pass
 
@@ -338,15 +349,49 @@ async def check_token_security(
     if str(info.get("is_blacklisted",         "0")) == "1": deduct(15, "Blacklist function")
     if str(info.get("transfer_pausable",      "0")) == "1": deduct(15, "Transfers can be paused")
 
-    # Top-10 holder concentration
+    # Holder analysis — count + concentration + creator exposure
     try:
         holders = info.get("holders", []) or []
+        num_holders = len(holders)
+
+        # Holder count signal
+        if num_holders >= 500:
+            bonus(5, f"{num_holders} holders")
+        elif num_holders >= 200:
+            bonus(3, f"{num_holders} holders")
+        elif num_holders >= 100:
+            bonus(1, f"{num_holders} holders")
+        elif num_holders < 50 and num_holders > 0:
+            deduct(5, f"Only {num_holders} holders")
+        elif num_holders < 20 and num_holders > 0:
+            deduct(10, f"Only {num_holders} holders")
+
         if holders:
             top10_pct = sum(float(h.get("percent") or 0) for h in holders[:10])
-            if top10_pct > 0.50:
+
+            # Concentration — 4 bands (was 2)
+            if top10_pct > 0.70:
+                deduct(20, f"Top 10 hold {top10_pct*100:.0f}% of supply")
+            elif top10_pct > 0.55:
                 deduct(15, f"Top 10 hold {top10_pct*100:.0f}% of supply")
-            elif top10_pct > 0.35:
+            elif top10_pct > 0.40:
                 deduct(10, f"Top 10 hold {top10_pct*100:.0f}% of supply")
+            elif top10_pct > 0.30:
+                deduct(5, f"Top 10 hold {top10_pct*100:.0f}% of supply")
+
+            # Creator/owner still holding check
+            creator_pct = 0.0
+            for h in holders:
+                tag = str(h.get("tag") or "").lower()
+                if "creator" in tag or "owner" in tag or "deployer" in tag:
+                    try:
+                        creator_pct += float(h.get("percent") or 0)
+                    except (ValueError, TypeError):
+                        pass
+            if creator_pct > 0.10:
+                deduct(10, f"Creator holds {creator_pct*100:.0f}%")
+            elif creator_pct > 0.05:
+                deduct(5, f"Creator holds {creator_pct*100:.0f}%")
     except Exception:
         pass
 
@@ -470,6 +515,55 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
             score = min(100, score + 3)
         elif composite < -30:
             score = max(0, score - 3)
+
+    # Market-structure signals (DEXScreener data already in pair dict)
+    age_h    = float(pair.get("age_hours", 0) or 0)
+    liq_usd  = float(pair.get("liquidity", 0) or 0)
+    vol_24h  = float(pair.get("volume_24h", 0) or 0)
+
+    # Token age — younger = higher risk
+    if age_h < 1:
+        score = max(0, score - 8)
+        flags.append("Token < 1h old")
+    elif age_h < 3:
+        score = max(0, score - 5)
+        flags.append(f"Token {age_h:.1f}h old")
+    elif age_h < 12:
+        score = max(0, score - 2)
+        flags.append(f"Token {age_h:.1f}h old")
+    elif age_h > 168:
+        score = min(100, score + 3)
+        flags.append(f"+3 Survived {int(age_h/24)}d")
+
+    # Liquidity depth bonus
+    if liq_usd >= 100_000:
+        score = min(100, score + 5)
+        flags.append(f"+5 Liquidity ${liq_usd/1000:.0f}k")
+    elif liq_usd >= 50_000:
+        score = min(100, score + 3)
+        flags.append(f"+3 Liquidity ${liq_usd/1000:.0f}k")
+    elif liq_usd >= 25_000:
+        score = min(100, score + 1)
+        flags.append(f"+1 Liquidity ${liq_usd/1000:.0f}k")
+
+    # Volume / liquidity ratio — measures activity vs pool size
+    if liq_usd > 0:
+        vl_ratio = vol_24h / liq_usd
+        if vl_ratio >= 10:
+            score = min(100, score + 5)
+            flags.append(f"+5 Vol/Liq {vl_ratio:.1f}x")
+        elif vl_ratio >= 5:
+            score = min(100, score + 3)
+            flags.append(f"+3 Vol/Liq {vl_ratio:.1f}x")
+        elif vl_ratio >= 2:
+            score = min(100, score + 1)
+            flags.append(f"+1 Vol/Liq {vl_ratio:.1f}x")
+        elif vl_ratio < 0.5:
+            score = max(0, score - 5)
+            flags.append(f"Low Vol/Liq {vl_ratio:.2f}x")
+        elif vl_ratio < 1:
+            score = max(0, score - 3)
+            flags.append(f"Low Vol/Liq {vl_ratio:.2f}x")
 
     # Hard drop: score below minimum — don't alert at all
     if score < 50:
