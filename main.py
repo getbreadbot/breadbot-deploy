@@ -50,8 +50,12 @@ async def _init_db() -> None:
     from config import DB_PATH
 
     # Core tables — inline to avoid circular imports
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
     try:
+        # WAL mode allows concurrent reads while a write is in progress.
+        # This eliminates "database is locked" errors from alt_data/yield loops.
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS meme_alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, chain TEXT NOT NULL,

@@ -429,6 +429,9 @@ async def fetch_new_pairs(client: httpx.AsyncClient) -> list[dict]:
         addr = profile.get("tokenAddress", "").strip()
         if not addr or is_already_alerted(addr):
             continue
+        # Reserve immediately — prevents duplicate profiles in the same
+        # payload from both passing is_already_alerted() before process_pair runs.
+        _seen_tokens.add(addr)
         detail = await _fetch_pair_detail(client, chain, addr)
         if detail:
             pairs.append(detail)

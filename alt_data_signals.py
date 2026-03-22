@@ -133,7 +133,8 @@ def get_cached_signals() -> dict:
 
 def ensure_alt_data_table() -> None:
     """Create the alt_data_signals table if it doesn't exist."""
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    conn.execute("PRAGMA journal_mode=WAL")
     try:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS alt_data_signals (
@@ -159,7 +160,7 @@ def _db_write(source: str, signal_type: str, value: float,
               value_shift: float = None, composite_score: float = None) -> None:
     """Insert a row into alt_data_signals."""
     try:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), timeout=10)
         conn.execute(
             """INSERT INTO alt_data_signals
                (source, signal_type, market_id, description, value, value_shift, composite_score)
