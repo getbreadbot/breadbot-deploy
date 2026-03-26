@@ -35,6 +35,21 @@ def _sign_request(payload: dict) -> str:
     return sig
 
 
+
+def _unwrap_result(result: Any) -> Any:
+    """Unwrap FastMCP content wrapper to plain dict/value."""
+    import json as _json
+    if isinstance(result, dict) and "structuredContent" in result and result["structuredContent"]:
+        return result["structuredContent"]
+    if isinstance(result, dict) and "content" in result:
+        content = result["content"]
+        if content and isinstance(content, list) and isinstance(content[0], dict) and "text" in content[0]:
+            try:
+                return _json.loads(content[0]["text"])
+            except (_json.JSONDecodeError, TypeError):
+                return content[0]["text"]
+    return result
+
 async def call_tool(tool_name: str, params: dict = None) -> Any:
     """Core MCP tool call. Uses FastMCP streamable-HTTP with session initialization."""
     params = params or {}
@@ -82,22 +97,13 @@ async def call_tool(tool_name: str, params: dict = None) -> Any:
                             raise HTTPException(status_code=502, detail=msg["error"].get("message", "MCP error"))
                     except _json.JSONDecodeError:
                         continue
-            return result if result is not None else {}
+            return _unwrap_result(result) if result is not None else {}
         else:
             data = resp.json()
             if "error" in data:
                 raise HTTPException(status_code=502, detail=data["error"].get("message", "MCP error"))
             result = data.get("result", {})
-            # FastMCP wraps tool output in result.content[0].text as JSON string
-            if isinstance(result, dict) and "content" in result:
-                import json as _json
-                content = result["content"]
-                if content and isinstance(content, list) and "text" in content[0]:
-                    try:
-                        return _json.loads(content[0]["text"])
-                    except _json.JSONDecodeError:
-                        return content[0]["text"]
-            return result
+            return _unwrap_result(result)
 
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"Cannot reach bot: {str(e)}")
