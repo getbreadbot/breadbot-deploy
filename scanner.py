@@ -47,6 +47,7 @@ from alt_data_signals import (
     handle_signals_command,
     handle_feargreed_command,
 )
+from social_signals import get_social_score_boost, handle_alpha_command
 
 # Engine singletons — shared across poller and main loop
 _grid_engine    = GridEngine()
@@ -568,6 +569,12 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
             score = max(0, score - 3)
             flags.append(f"Low Vol/Liq {vl_ratio:.2f}x")
 
+    # Social signals — Arkham + alpha channel boost
+    social_boost, social_flags = await get_social_score_boost(token_addr, chain, client)
+    if social_boost:
+        score = min(100, score + social_boost)
+        flags += social_flags
+
     # Hard drop: score below minimum — don't alert at all
     if score < 50:
         log.info("  Dropped %s: score %d < 50", symbol, score)
@@ -743,6 +750,8 @@ async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
         await handle_feargreed_command(client)
     elif cmd == "automode":
         await handle_automode_command(client, args)
+    elif cmd == "alpha":
+        await handle_alpha_command(client, send_message)
     elif cmd == "status":
         await handle_status_command(client)
 

@@ -119,3 +119,41 @@ required = false
 name = "VAPID_EMAIL"
 description = "Optional — your email, required if using VAPID push notifications"
 required = false
+
+# ── SOCIAL SIGNALS ─────────────────────────────────────────────────────────────
+[[deploy.envVars]]
+name = "ARKHAM_API_KEY"
+description = "Arkham Intelligence API key — free tier at arkhamintelligence.com. Used for smart-money wallet detection."
+required = false
+
+[[deploy.envVars]]
+name = "ALPHA_CHANNEL_IDS"
+description = "Comma-separated Telegram channel IDs to monitor for contract addresses (e.g. -1001234567890,-1009876543210)"
+required = false
+
+[[deploy.envVars]]
+name = "ALPHA_SIGNAL_BOOST"
+description = "Score boost when a token appears in 2+ alpha channels within 15 minutes (default 8)"
+required = false
+defaultValue = "8"
+
+[[deploy.envVars]]
+name = "SMART_MONEY_SIGNAL_BOOST"
+description = "Score boost when a labeled smart-money wallet has bought in via Arkham (default 8)"
+required = false
+defaultValue = "8"
+
+[[deploy.envVars]]
+name = "TELEGRAM_SESSION_STRING"
+description = "Telethon session string for alpha channel monitoring. Generate once with Telethon and store here."
+required = false
+
+[[deploy.envVars]]
+name = "TELEGRAM_API_ID"
+description = "Telegram app API ID from my.telegram.org/apps — required for alpha channel monitor"
+required = false
+
+[[deploy.envVars]]
+name = "TELEGRAM_API_HASH"
+description = "Telegram app API hash from my.telegram.org/apps — required for alpha channel monitor"
+required = false

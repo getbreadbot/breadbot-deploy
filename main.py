@@ -187,6 +187,14 @@ async def _run_alt_data() -> None:
         log.error("alt_data_signals crashed: %s", exc, exc_info=True)
 
 
+async def _run_alpha_monitor() -> None:
+    try:
+        from social_signals import monitor_alpha_channels
+        await monitor_alpha_channels()
+    except Exception as exc:
+        log.error("social_signals alpha monitor crashed: %s", exc, exc_info=True)
+
+
 # ── Main entry point ──────────────────────────────────────────────────────────
 
 async def main() -> None:
@@ -231,6 +239,9 @@ async def main() -> None:
 
         # Alt data signals loop (opt-in — needs ALT_DATA_ENABLED=true)
         tasks.append(asyncio.create_task(_run_alt_data(), name="alt_data"))
+
+        # Alpha channel monitor (opt-in — needs ALPHA_CHANNEL_IDS + TELEGRAM_SESSION_STRING)
+        tasks.append(asyncio.create_task(_run_alpha_monitor(), name="alpha_monitor"))
 
         log.info("All %d tasks started", len(tasks))
 
