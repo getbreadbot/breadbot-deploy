@@ -250,12 +250,112 @@ async def monitor_alpha_channels() -> None:
                                 "social_signals: MULTI_CHANNEL_ALPHA %s in %d channels",
                                 addr[:16], channels_count
                             )
+                            # Broadcast to all registered buyers
+                            msg = _format_alpha_broadcast(addr, channels_count, text)
+                            asyncio.create_task(
+                                broadcast_alpha_signal(addr, channels_count, msg)
+                            )
 
         log.info("social_signals: alpha channel monitor running")
         await client.run_until_disconnected()
 
     except Exception as exc:
         log.error("social_signals: alpha channel monitor crashed: %s", exc)
+
+
+# ── Buyer broadcast ───────────────────────────────────────────────────────────
+
+async def broadcast_alpha_signal(
+    token_addr: str,
+    channel_count: int,
+    message_text: str,
+) -> None:
+    """
+    Send an alpha channel signal to all registered buyers via their own bot tokens.
+
+    Calls the license server's /api/buyers/registered endpoint to get the list,
+    then sends a Telegram message to each buyer using their individual bot token.
+
+    Runs as a fire-and-forget task — errors per-buyer are logged but do not
+    block other deliveries.
+
+    Requires in .env:
+        LICENSE_SERVER_URL=https://keys.breadbot.app:8002  (or internal URL)
+        LICENSE_ADMIN_SECRET=<same value as on license server>
+    """
+    license_url    = os.getenv("LICENSE_SERVER_URL", "https://keys.breadbot.app:8002").rstrip("/")
+    admin_secret   = os.getenv("LICENSE_ADMIN_SECRET", "").strip()
+
+    if not admin_secret:
+        log.warning("broadcast_alpha_signal: LICENSE_ADMIN_SECRET not set — skipping broadcast")
+        return
+
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.get(
+                f"{license_url}/api/buyers/registered",
+                headers={"Authorization": f"Bearer {admin_secret}"},
+            )
+            if resp.status_code != 200:
+                log.warning("broadcast: could not fetch buyer list — HTTP %d", resp.status_code)
+                return
+
+            buyers = resp.json().get("buyers", [])
+            if not buyers:
+                log.debug("broadcast: no registered buyers to notify")
+                return
+
+            log.info("broadcast: sending alpha signal to %d buyers", len(buyers))
+
+            # Send to each buyer concurrently
+            tasks = [
+                _send_buyer_alert(client, b["telegram_bot_token"], b["telegram_chat_id"], message_text)
+                for b in buyers
+                if b.get("telegram_bot_token") and b.get("telegram_chat_id")
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            success = sum(1 for r in results if r is True)
+            log.info("broadcast: delivered to %d/%d buyers", success, len(tasks))
+
+    except Exception as exc:
+        log.error("broadcast_alpha_signal failed: %s", exc)
+
+
+async def _send_buyer_alert(
+    client: httpx.AsyncClient,
+    bot_token: str,
+    chat_id: str,
+    text: str,
+) -> bool:
+    """Send a single Telegram message via a buyer's bot token."""
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    try:
+        resp = await client.post(url, json={
+            "chat_id":    chat_id,
+            "text":       text,
+            "parse_mode": "HTML",
+        })
+        if resp.status_code == 200 and resp.json().get("ok"):
+            return True
+        log.warning("_send_buyer_alert: Telegram rejected for chat %s: %s", chat_id, resp.text[:100])
+        return False
+    except Exception as exc:
+        log.warning("_send_buyer_alert failed for chat %s: %s", chat_id, exc)
+        return False
+
+
+def _format_alpha_broadcast(token_addr: str, channel_count: int, sample_text: str) -> str:
+    """Format the alpha broadcast message sent to all buyers."""
+    short_addr = token_addr[:20] + "..." if len(token_addr) > 20 else token_addr
+    chain_hint = "Solana" if len(token_addr) < 44 and not token_addr.startswith("0x") else "Base/EVM"
+    return (
+        f"\U0001F4E1 <b>Alpha Signal — {chain_hint}</b>\n\n"
+        f"<code>{short_addr}</code>\n"
+        f"Spotted in <b>{channel_count} alpha channels</b> within 15 minutes.\n\n"
+        f"Run /alpha for the full address and scanner details."
+    )
+
 
 # ── Scanner-facing API ────────────────────────────────────────────────────────
 

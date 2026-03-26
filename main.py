@@ -197,6 +197,54 @@ async def _run_alpha_monitor() -> None:
 
 # ── Main entry point ──────────────────────────────────────────────────────────
 
+async def _register_with_license_server() -> None:
+    """
+    Register this buyer's Telegram bot token and chat ID with the license server.
+
+    Called once on startup. Allows the operator's alpha channel monitor to
+    broadcast shared signals to all active buyers.
+
+    Requires:
+        LICENSE_KEY            - the buyer's Whop license key
+        TELEGRAM_BOT_TOKEN     - the buyer's bot token
+        TELEGRAM_CHAT_ID       - the buyer's chat ID
+        LICENSE_SERVER_URL     - https://keys.breadbot.app:8002
+
+    Silently skips if any required var is missing.
+    Failure does not block startup — registration is best-effort.
+    """
+    license_key  = os.getenv("LICENSE_KEY",         "").strip()
+    bot_token    = os.getenv("TELEGRAM_BOT_TOKEN",  "").strip()
+    chat_id      = os.getenv("TELEGRAM_CHAT_ID",    "").strip()
+    server_url   = os.getenv("LICENSE_SERVER_URL",  "").strip().rstrip("/")
+
+    if not all([license_key, bot_token, chat_id, server_url]):
+        log.debug("_register_with_license_server: missing vars — skipping")
+        return
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"{server_url}/api/register",
+                json={
+                    "license_key":          license_key,
+                    "telegram_bot_token":   bot_token,
+                    "telegram_chat_id":     chat_id,
+                },
+            )
+            if resp.status_code == 200 and resp.json().get("registered"):
+                log.info("License server registration: OK")
+            else:
+                log.warning(
+                    "License server registration returned %d: %s",
+                    resp.status_code, resp.text[:120],
+                )
+    except Exception as exc:
+        log.warning("License server registration failed (non-fatal): %s", exc)
+
+
+
 async def main() -> None:
     # 1. Init DB before anything else writes to it
     await _init_db()
@@ -204,14 +252,17 @@ async def main() -> None:
     # 2. Log startup config
     _log_startup_config()
 
-    # 3. Import scanner internals (always runs)
+    # 3. Register with license server (non-blocking, best-effort)
+    await _register_with_license_server()
+
+    # 4. Import scanner internals (always runs)
     from scanner import scan_loop, telegram_poller
 
-    # 4. Import engine singletons (already instantiated in scanner module
+    # 5. Import engine singletons (already instantiated in scanner module
     #    when it was imported above; we reuse them here for the loops)
     from scanner import _grid_engine, _funding_engine
 
-    # 5. Build task list — scanner always included, others conditional
+    # 6. Build task list — scanner always included, others conditional
     import httpx
 
     async with httpx.AsyncClient() as client:
