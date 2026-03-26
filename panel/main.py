@@ -49,12 +49,19 @@ app.include_router(mcp_router,     prefix="/api/bot",     tags=["bot"])
 app.include_router(railway_router, prefix="/api/settings", tags=["settings"])
 app.include_router(ws_router,      prefix="/api/ws",      tags=["websocket"])
 
+@app.get("/api/health")
+async def health():
+    return {"status": "ok"}
+
 # Serve React build — must come after API routes
 if FRONTEND_DIR.exists():
     app.mount("/assets", StaticFiles(directory=FRONTEND_DIR / "assets"), name="assets")
 
     @app.get("/{full_path:path}")
-    async def serve_frontend(full_path: str):
+    async def serve_frontend(full_path: str, request: Request):
+        # Let /api routes fall through to their handlers
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
         index = FRONTEND_DIR / "index.html"
         return FileResponse(index)
 else:
@@ -63,6 +70,4 @@ else:
         return {"status": "backend running — frontend not built yet"}
 
 
-@app.get("/api/health")
-async def health():
-    return {"status": "ok"}
+

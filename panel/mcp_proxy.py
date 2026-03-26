@@ -36,23 +36,69 @@ def _sign_request(payload: dict) -> str:
 
 
 async def call_tool(tool_name: str, params: dict = None) -> Any:
-    """Core MCP tool call. Raises HTTPException on failure."""
+    """Core MCP tool call. Uses FastMCP streamable-HTTP with session initialization."""
     params = params or {}
-    payload = {"tool": tool_name, "params": params, "ts": int(time.time())}
-    sig = _sign_request(payload)
+
+    init_payload = {
+        "jsonrpc": "2.0", "method": "initialize", "id": 0,
+        "params": {"protocolVersion": "2024-11-05",
+                   "capabilities": {},
+                   "clientInfo": {"name": "breadbot-panel", "version": "1.0"}}
+    }
+    call_payload = {
+        "jsonrpc": "2.0", "method": "tools/call", "id": 1,
+        "params": {"name": tool_name, "arguments": params}
+    }
+    hdrs = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.post(
-                f"{_mcp_url()}/call",
-                json=payload,
-                headers={"X-Signature": sig, "Content-Type": "application/json"},
-            )
+            # Step 1: initialize to get session ID
+            ir = await client.post(f"{_mcp_url()}/mcp", json=init_payload, headers=hdrs)
+            session_id = ir.headers.get("mcp-session-id") or ir.headers.get("x-mcp-session-id")
+            if session_id:
+                hdrs["mcp-session-id"] = session_id
+            # Step 2: call the tool
+            resp = await client.post(f"{_mcp_url()}/mcp", json=call_payload, headers=hdrs)
         if resp.status_code == 401:
-            raise HTTPException(status_code=502, detail="MCP authentication failed — check MCP_SECRET")
-        if resp.status_code != 200:
+            raise HTTPException(status_code=502, detail="MCP authentication failed")
+        if resp.status_code not in (200, 202):
             raise HTTPException(status_code=502, detail=f"Bot returned {resp.status_code}")
-        return resp.json()
+
+        # FastMCP may return SSE stream or plain JSON
+        ct = resp.headers.get("content-type", "")
+        if "text/event-stream" in ct:
+            # Parse SSE: find the data line with the JSON-RPC result
+            result = None
+            for line in resp.text.splitlines():
+                if line.startswith("data: "):
+                    import json as _json
+                    try:
+                        msg = _json.loads(line[6:])
+                        if "result" in msg:
+                            result = msg["result"]
+                            break
+                        if "error" in msg:
+                            raise HTTPException(status_code=502, detail=msg["error"].get("message", "MCP error"))
+                    except _json.JSONDecodeError:
+                        continue
+            return result if result is not None else {}
+        else:
+            data = resp.json()
+            if "error" in data:
+                raise HTTPException(status_code=502, detail=data["error"].get("message", "MCP error"))
+            result = data.get("result", {})
+            # FastMCP wraps tool output in result.content[0].text as JSON string
+            if isinstance(result, dict) and "content" in result:
+                import json as _json
+                content = result["content"]
+                if content and isinstance(content, list) and "text" in content[0]:
+                    try:
+                        return _json.loads(content[0]["text"])
+                    except _json.JSONDecodeError:
+                        return content[0]["text"]
+            return result
+
     except httpx.RequestError as e:
         raise HTTPException(status_code=503, detail=f"Cannot reach bot: {str(e)}")
 

@@ -13,7 +13,7 @@ import time
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -86,9 +86,10 @@ async def setup(payload: SetupPayload, response: Response):
     if len(payload.password) < 8:
         raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
 
-    # Validate Whop license key
+    # Validate Whop license key (skip in operator mode)
+    operator_mode = os.environ.get("OPERATOR_MODE", "").lower() in ("1", "true")
     whop_api_key = os.environ.get("WHOP_API_KEY")
-    if whop_api_key:
+    if whop_api_key and not operator_mode:
         try:
             async with httpx.AsyncClient(timeout=10) as client:
                 resp = await client.get(
@@ -98,7 +99,6 @@ async def setup(payload: SetupPayload, response: Response):
             if resp.status_code != 200:
                 raise HTTPException(status_code=403, detail="Invalid or expired license key")
         except httpx.RequestError:
-            # If Whop is unreachable, allow setup to proceed — don't block the buyer
             pass
 
     # Store hash in environment (persists for this process; Railway restart reads from vars)
