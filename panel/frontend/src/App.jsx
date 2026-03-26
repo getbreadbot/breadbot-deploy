@@ -9,6 +9,7 @@ import Positions from './pages/Positions.jsx'
 import Yields from './pages/Yields.jsx'
 import Controls from './pages/Controls.jsx'
 import Settings from './pages/Settings.jsx'
+import Channels from './pages/Channels.jsx'
 import { get } from './lib/api.js'
 
 export default function App() {
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="yields"     element={<Yields />} />
           <Route path="controls"   element={<Controls />} />
           <Route path="settings"   element={<Settings />} />
+          <Route path="channels"   element={<Channels />} />
         </Route>
       </Routes>
     </BrowserRouter>

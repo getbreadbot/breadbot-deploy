@@ -9,6 +9,7 @@ const NAV = [
   { to: '/yields',    label: 'Yields',     icon: '⟁' },
   { to: '/controls',  label: 'Controls',   icon: '◉' },
   { to: '/settings',  label: 'Settings',   icon: '⚙' },
+  { to: '/channels',  label: 'Channels',   icon: '◫' },
 ]
 
 export default function Layout() {
