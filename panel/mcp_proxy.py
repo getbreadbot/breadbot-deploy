@@ -186,3 +186,39 @@ async def rug_check(payload: RugCheckPayload, auth=Depends(verify_session)):
 @router.post("/rebalance/confirm")
 async def rebalance_confirm(auth=Depends(verify_session)):
     return await call_tool("confirm_rebalance")
+
+
+# ── Signal Channels ───────────────────────────────────────────────────────────
+
+class AddChannelPayload(BaseModel):
+    channel_id: str
+    label: str = ""
+
+
+@router.get("/channels")
+async def list_channels(auth=Depends(verify_session)):
+    return await call_tool("manage_alpha_channels", {"secret": os.environ.get("MCP_SECRET", ""), "action": "list"})
+
+
+@router.get("/channels/hits")
+async def channel_hits(auth=Depends(verify_session)):
+    return await call_tool("manage_alpha_channels", {"secret": os.environ.get("MCP_SECRET", ""), "action": "hits"})
+
+
+@router.post("/channels")
+async def add_channel(payload: AddChannelPayload, auth=Depends(verify_session)):
+    return await call_tool("manage_alpha_channels", {
+        "secret": os.environ.get("MCP_SECRET", ""),
+        "action": "add",
+        "channel_id": payload.channel_id,
+        "label": payload.label,
+    })
+
+
+@router.delete("/channels/{channel_id}")
+async def remove_channel(channel_id: str, auth=Depends(verify_session)):
+    return await call_tool("manage_alpha_channels", {
+        "secret": os.environ.get("MCP_SECRET", ""),
+        "action": "remove",
+        "channel_id": channel_id,
+    })

@@ -1,240 +1,488 @@
+#!/usr/bin/env python3
 """
-mcp_server.py — Breadbot MCP Server (Phase 3)
+mcp_server.py -- Phase 5
+FastMCP server that exposes Breadbot data as MCP tools.
+Claude connects to this server and gains read access to live bot state:
+positions, yield rates, scanner alerts, risk status, and daily P&L.
 
-Exposes bot data as MCP tools for Claude Desktop.
-READ-ONLY: never writes to the database or executes trades.
+Two write tools (pause_trading, resume_trading) require the MCP_SECRET.
 
-Run: python mcp_server.py
-Test: npx @modelcontextprotocol/inspector python mcp_server.py
+Auth: shared secret in .env (MCP_SECRET). Server listens on localhost only.
+Run:  python3 mcp_server.py
+
+New .env vars:
+  MCP_PORT   -- port to listen on (default 8051)
+  MCP_SECRET -- shared secret for write ops (store in Vaultwarden -> Breadbot)
 """
 
+import os
 import sqlite3
-import asyncio
-import json
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
+import requests
+from dotenv import load_dotenv
 from fastmcp import FastMCP
 
-# Import rug check scorer directly
-from scanner.rugcheck import score_token
+load_dotenv(Path(__file__).parent / ".env")
 
-mcp = FastMCP("breadbot")
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+DB_PATH    = Path(__file__).parent / "data" / "cryptobot.db"
+MCP_PORT   = int(os.getenv("MCP_PORT",   "8051"))
+MCP_SECRET = os.getenv("MCP_SECRET",     "").strip()
+PORTFOLIO  = float(os.getenv("TOTAL_PORTFOLIO_USD", "5000"))
 
-DB_PATH = Path(__file__).parent / "data" / "cryptobot.db"
+mcp = FastMCP(
+    name="Breadbot",
+    instructions=(
+        "Live data from the Breadbot crypto trading bot. "
+        "Use get_status for a quick overview. "
+        "Write operations (pause_trading, resume_trading) require MCP_SECRET."
+    ),
+)
 
+# ---------------------------------------------------------------------------
+# DB helpers
+# ---------------------------------------------------------------------------
+def _db() -> sqlite3.Connection:
+    if not DB_PATH.exists():
+        raise RuntimeError(f"Database not found at {DB_PATH}")
+    conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    return conn
 
-def _query(sql: str, params: tuple = ()) -> list[dict]:
-    """Run a read-only query and return rows as dicts."""
-    try:
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        rows = conn.execute(sql, params).fetchall()
-        conn.close()
-        return [dict(r) for r in rows]
-    except Exception as e:
-        return [{"error": str(e)}]
+def _db_write() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    return conn
 
+def _rows(query: str, params: tuple = ()) -> list[dict]:
+    conn = _db()
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
-# ── Tool 1: get_status ──────────────────────────────────────────────────────
-
+# ---------------------------------------------------------------------------
+# Read tools
+# ---------------------------------------------------------------------------
 @mcp.tool()
-def get_status() -> dict:
-    """Get current Breadbot status: trading state, today's P&L, open positions, daily loss limit usage, and last activity timestamp."""
-
-    # Open positions count
-    positions = _query("SELECT COUNT(*) as cnt FROM positions WHERE status='open'")
-    open_count = positions[0]["cnt"] if positions and "cnt" in positions[0] else 0
-
-    # Today's realized P&L from closed trades
-    pnl_rows = _query(
-        "SELECT COALESCE(SUM(pnl_usd), 0) as total_pnl FROM trades WHERE DATE(executed_at) = DATE('now')"
-    )
-    daily_pnl = pnl_rows[0]["total_pnl"] if pnl_rows and "total_pnl" in pnl_rows[0] else 0.0
-
-    # Daily loss limit from config defaults
-    portfolio_usd = 5000.0
-    daily_loss_limit_pct = 0.05
-    try:
-        import config
-        portfolio_usd = config.TOTAL_PORTFOLIO_USD
-        daily_loss_limit_pct = config.DAILY_LOSS_LIMIT_PCT
-    except Exception:
-        pass
-
-    daily_loss_limit_usd = portfolio_usd * daily_loss_limit_pct
-    loss_pct_used = round(abs(daily_pnl) / daily_loss_limit_usd * 100, 1) if daily_pnl < 0 else 0.0
-
-    # Determine if trading would be paused
-    trading_active = True
-    pause_reason = ""
-    if daily_pnl <= -daily_loss_limit_usd:
-        trading_active = False
-        pause_reason = f"Daily loss limit hit: ${abs(daily_pnl):.2f} (limit: ${daily_loss_limit_usd:.2f})"
-
-    # Last activity timestamp (most recent across key tables)
-    last_activity = _query(
-        """SELECT MAX(ts) as last_ts FROM (
-            SELECT MAX(created_at) as ts FROM meme_alerts
-            UNION ALL
-            SELECT MAX(executed_at) as ts FROM trades
-            UNION ALL
-            SELECT MAX(recorded_at) as ts FROM yield_snapshots
-        )"""
-    )
-    last_ts = last_activity[0]["last_ts"] if last_activity and last_activity[0].get("last_ts") else "no data"
-
+def get_status() -> dict[str, Any]:
+    "Snapshot of current bot state: paused flag, open positions, today P&L, loss limit consumed."
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    conn = _db()
+    paused_row = conn.execute(
+        "SELECT value FROM bot_config WHERE key='trading_paused'"
+    ).fetchone()
+    paused = (paused_row["value"].lower() in ("1", "true", "yes")) if paused_row else False
+    open_count = conn.execute(
+        "SELECT COUNT(*) FROM positions WHERE status='open'"
+    ).fetchone()[0]
+    summary = conn.execute(
+        "SELECT realized_pnl, fees_paid, trades_count FROM daily_summary WHERE date=?",
+        (today,),
+    ).fetchone()
+    conn.close()
+    realized_pnl = dict(summary)["realized_pnl"] if summary else 0.0
+    fees_paid    = dict(summary)["fees_paid"]    if summary else 0.0
+    trades_count = dict(summary)["trades_count"] if summary else 0
+    daily_loss_limit = PORTFOLIO * float(os.getenv("DAILY_LOSS_LIMIT_PCT", "0.05"))
+    loss_consumed_pct = round(abs(min(realized_pnl, 0)) / daily_loss_limit * 100, 1) if daily_loss_limit else 0
     return {
-        "trading_active": trading_active,
-        "pause_reason": pause_reason,
-        "daily_pnl_usd": round(daily_pnl, 2),
-        "daily_loss_limit_usd": daily_loss_limit_usd,
-        "daily_loss_pct_used": loss_pct_used,
-        "open_positions": open_count,
-        "portfolio_usd": portfolio_usd,
-        "last_activity": last_ts,
+        "trading_paused":          paused,
+        "open_positions":          open_count,
+        "today_realized_pnl":      round(realized_pnl, 2),
+        "today_fees_paid":         round(fees_paid, 2),
+        "today_trades":            trades_count,
+        "daily_loss_limit_usd":    round(daily_loss_limit, 2),
+        "loss_limit_consumed_pct": loss_consumed_pct,
+        "portfolio_usd":           PORTFOLIO,
+        "timestamp_utc":           datetime.now(timezone.utc).isoformat(),
     }
 
 
-# ── Tool 2: get_positions ───────────────────────────────────────────────────
-
 @mcp.tool()
-def get_positions() -> dict:
-    """Get all open meme coin positions with entry price, stop loss, profit targets, and time opened."""
-
-    rows = _query(
-        """SELECT symbol, token_name, chain, token_addr, entry_price, quantity,
-                  cost_basis_usd, stop_loss_usd, take_profit_25, take_profit_50,
-                  exchange, opened_at
-           FROM positions WHERE status='open' ORDER BY opened_at DESC"""
+def get_positions(status: str = "open") -> list[dict]:
+    "Return positions. status: open (default), closed, or all."
+    if status == "all":
+        where, params = "", ()
+    else:
+        where, params = "WHERE status=?", (status,)
+    return _rows(
+        f"SELECT * FROM positions {where} ORDER BY opened_at DESC LIMIT 50",
+        params,
     )
 
-    if not rows or (len(rows) == 1 and "error" in rows[0]):
-        return {"status": "no data", "positions": []}
-
-    return {"count": len(rows), "positions": rows}
-
-
-# ── Tool 3: get_yields ──────────────────────────────────────────────────────
 
 @mcp.tool()
-def get_yields() -> dict:
-    """Get current stablecoin yield rates (APY) across all monitored DeFi platforms: Coinbase, Morpho, Aave V3, Compound, Kraken."""
-
-    rows = _query(
-        """SELECT platform, asset, apy, tvl_usd, notes, recorded_at
-           FROM yield_snapshots
-           WHERE id IN (
-               SELECT MAX(id) FROM yield_snapshots GROUP BY platform, asset
-           )
-           ORDER BY apy DESC"""
+def get_yields(limit: int = 20) -> list[dict]:
+    "Most recent yield snapshot per platform/asset. Shows current APY across all monitored platforms."
+    return _rows(
+        """
+        SELECT platform, asset, apy, tvl_usd, notes, recorded_at
+        FROM yield_snapshots
+        WHERE (platform, asset, recorded_at) IN (
+            SELECT platform, asset, MAX(recorded_at)
+            FROM yield_snapshots
+            GROUP BY platform, asset
+        )
+        ORDER BY apy DESC
+        LIMIT ?
+        """,
+        (limit,),
     )
 
-    if not rows or (len(rows) == 1 and "error" in rows[0]):
-        return {"status": "no data", "yields": []}
-
-    return {"count": len(rows), "yields": rows}
-
-
-# ── Tool 4: run_rug_check ───────────────────────────────────────────────────
 
 @mcp.tool()
-async def run_rug_check(contract_address: str, chain: str) -> dict:
-    """Run an on-demand rug pull security check on any token contract address.
-    Calls GoPlus and RugCheck APIs to produce a security score (0-100) with detailed flags.
+def get_yield_history(platform: str, asset: str = "USDC", limit: int = 48) -> list[dict]:
+    "Yield rate readings for a specific platform over time. limit=48 gives ~2 days of hourly data."
+    return _rows(
+        "SELECT platform, asset, apy, tvl_usd, notes, recorded_at "
+        "FROM yield_snapshots WHERE platform=? AND asset=? "
+        "ORDER BY recorded_at DESC LIMIT ?",
+        (platform, asset, limit),
+    )
 
-    Args:
-        contract_address: The token contract address to check.
-        chain: The blockchain - either "solana" or "base".
-    """
-    if chain not in ("solana", "base"):
-        return {"error": f"Unsupported chain: {chain}. Use 'solana' or 'base'."}
 
+@mcp.tool()
+def get_alert_history(limit: int = 20, decision: str = "") -> list[dict]:
+    "Recent scanner alerts. decision: buy, skip, pending, or empty for all."
+    if decision:
+        return _rows(
+            "SELECT * FROM meme_alerts WHERE decision=? ORDER BY created_at DESC LIMIT ?",
+            (decision, limit),
+        )
+    return _rows(
+        "SELECT * FROM meme_alerts ORDER BY created_at DESC LIMIT ?",
+        (limit,),
+    )
+
+
+@mcp.tool()
+def run_rug_check(token_address: str, chain: str = "solana") -> dict[str, Any]:
+    "On-demand rug pull check via GoPlus. chain: solana or base."
+    goplus_key  = os.getenv("GOPLUS_API_KEY", "")
+    chain_id_map = {"base": "8453", "ethereum": "1"}
+    if chain.lower() == "solana":
+        url = f"https://api.gopluslabs.io/api/v1/solana/token_security?contract_addresses={token_address}"
+    else:
+        cid = chain_id_map.get(chain.lower(), "8453")
+        url = f"https://api.gopluslabs.io/api/v1/token_security/{cid}?contract_addresses={token_address}"
+    headers = {"Authorization": goplus_key} if goplus_key else {}
     try:
-        result = await score_token(contract_address, chain)
-        # Simplify the raw data for readability
-        output = {
-            "contract": contract_address,
-            "chain": chain,
-            "security_score": result["score"],
-            "flags": result["flags"],
-            "flag_count": len(result["flags"]),
-            "verdict": "PASS" if result["score"] >= 50 else "BLOCKED",
+        resp = requests.get(url, headers=headers, timeout=10)
+        resp.raise_for_status()
+        data = resp.json()
+        result_data = (data.get("result") or {}).get(token_address.lower()) or \
+                      (data.get("result") or {}).get(token_address, {})
+        return {"token_address": token_address, "chain": chain, "raw": result_data,
+                "checked_at": datetime.now(timezone.utc).isoformat()}
+    except Exception as e:
+        return {"error": str(e), "token_address": token_address, "chain": chain}
+
+
+# ---------------------------------------------------------------------------
+# Write tools (require MCP_SECRET)
+# ---------------------------------------------------------------------------
+def _auth(secret: str) -> bool:
+    if not MCP_SECRET:
+        return False
+    return secret == MCP_SECRET
+
+
+@mcp.tool()
+def pause_trading(secret: str, reason: str = "") -> dict[str, str]:
+    "Pause all new trade alerts. Requires MCP_SECRET. reason is optional."
+    if not _auth(secret):
+        return {"status": "error", "message": "Invalid secret. Trading not paused."}
+    conn = _db_write()
+    now  = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO bot_config (key, value, updated_at) VALUES ('trading_paused', '1', ?)",
+        (now,),
+    )
+    if reason:
+        conn.execute(
+            "INSERT OR REPLACE INTO bot_config (key, value, updated_at) VALUES ('pause_reason', ?, ?)",
+            (reason, now),
+        )
+    conn.commit()
+    conn.close()
+    return {"status": "paused", "reason": reason, "timestamp_utc": now}
+
+
+@mcp.tool()
+def resume_trading(secret: str) -> dict[str, str]:
+    "Resume trading after a pause. Requires MCP_SECRET."
+    if not _auth(secret):
+        return {"status": "error", "message": "Invalid secret. Trading not resumed."}
+    conn = _db_write()
+    now  = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO bot_config (key, value, updated_at) VALUES ('trading_paused', '0', ?)",
+        (now,),
+    )
+    conn.commit()
+    conn.close()
+    return {"status": "resumed", "timestamp_utc": now}
+
+
+
+# ---------------------------------------------------------------------------
+# Panel tools — added 2026-03-26
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def daily_pnl() -> dict[str, Any]:
+    "Today's realized P&L and trade count."
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rows = _rows(
+        "SELECT realized_pnl, unrealized_pnl, yield_earned, fees_paid, trades_count "
+        "FROM daily_summary WHERE date=?",
+        (today,),
+    )
+    if rows:
+        r = rows[0]
+        return {
+            "date": today,
+            "realized_pnl_usd":   round(r["realized_pnl"],   2),
+            "unrealized_pnl_usd": round(r["unrealized_pnl"], 2),
+            "yield_earned_usd":   round(r["yield_earned"],    2),
+            "fees_paid_usd":      round(r["fees_paid"],       2),
+            "trades_count":       r["trades_count"],
         }
-        # Include GoPlus summary if available
-        raw = result.get("raw", {})
-        if "goplus" in raw and raw["goplus"]:
-            gp = raw["goplus"]
-            output["goplus_summary"] = {
-                "is_honeypot": gp.get("is_honeypot", "unknown"),
-                "buy_tax": gp.get("buy_tax", "unknown"),
-                "sell_tax": gp.get("sell_tax", "unknown"),
-                "holder_count": gp.get("holder_count", "unknown"),
-            }
-        if "rugcheck" in raw:
-            output["rugcheck_passed"] = raw["rugcheck"]
-        return output
-
-    except Exception as e:
-        return {"error": f"Rug check failed: {str(e)}"}
-
-
-# ── Tool 5: get_alert_history ────────────────────────────────────────────────
-
-@mcp.tool()
-def get_alert_history(limit: int = 20) -> dict:
-    """Get recent scanner alerts showing tokens discovered, their security scores, and buy/skip decisions.
-
-    Args:
-        limit: Number of alerts to return (default 20, max 100).
-    """
-    limit = min(max(1, limit), 100)
-
-    rows = _query(
-        """SELECT id, symbol, token_name, chain, token_addr, price_usd, liquidity,
-                  volume_24h, mcap, rug_score, rug_flags, decision, created_at
-           FROM meme_alerts ORDER BY created_at DESC LIMIT ?""",
-        (limit,)
-    )
-
-    if not rows or (len(rows) == 1 and "error" in rows[0]):
-        return {"status": "no data", "alerts": []}
-
-    return {"count": len(rows), "alerts": rows}
-
-
-# ── Tool 6: get_yield_history ────────────────────────────────────────────────
-
-@mcp.tool()
-def get_yield_history(platform: str, hours: int = 24) -> dict:
-    """Get historical yield rate readings for a specific platform over time.
-
-    Args:
-        platform: Platform name (e.g. "Coinbase", "Aave V3", "Compound V3", "Kraken", "Coinbase Morpho").
-        hours: Number of hours of history to return (default 24).
-    """
-    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
-
-    rows = _query(
-        """SELECT platform, asset, apy, tvl_usd, recorded_at
-           FROM yield_snapshots
-           WHERE platform = ? AND recorded_at >= ?
-           ORDER BY recorded_at ASC""",
-        (platform, cutoff)
-    )
-
-    if not rows or (len(rows) == 1 and "error" in rows[0]):
-        return {"status": "no data", "platform": platform, "hours": hours, "readings": []}
-
     return {
-        "platform": platform,
-        "hours": hours,
-        "reading_count": len(rows),
-        "readings": rows,
+        "date": today,
+        "realized_pnl_usd": 0.0, "unrealized_pnl_usd": 0.0,
+        "yield_earned_usd": 0.0, "fees_paid_usd": 0.0, "trades_count": 0,
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+@mcp.tool()
+def get_risk_status() -> dict[str, Any]:
+    "Risk manager state: loss limit, position limits, pause state, daily loss consumed."
+    daily_loss_limit_pct  = float(os.getenv("DAILY_LOSS_LIMIT_PCT",   "0.05"))
+    max_position_pct      = float(os.getenv("MAX_POSITION_SIZE_PCT",  "0.02"))
+    max_open_positions    = int(os.getenv("MAX_OPEN_POSITIONS",       "5"))
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    summary = _rows(
+        "SELECT realized_pnl FROM daily_summary WHERE date=?", (today,)
+    )
+    realized_pnl       = summary[0]["realized_pnl"] if summary else 0.0
+    daily_loss_limit_usd = PORTFOLIO * daily_loss_limit_pct
+    loss_consumed_pct    = (
+        round(abs(min(realized_pnl, 0)) / daily_loss_limit_usd * 100, 1)
+        if daily_loss_limit_usd else 0.0
+    )
+    open_count = _rows("SELECT COUNT(*) as cnt FROM positions WHERE status='open'")
+    open_positions = open_count[0]["cnt"] if open_count else 0
+    paused_row     = _rows("SELECT value FROM bot_config WHERE key='trading_paused'")
+    paused         = bool(paused_row and paused_row[0]["value"].lower() in ("1", "true", "yes"))
+    reason_row     = _rows("SELECT value FROM bot_config WHERE key='pause_reason'")
+    pause_reason   = reason_row[0]["value"] if reason_row else ""
+    return {
+        "trading_paused":           paused,
+        "pause_reason":             pause_reason,
+        "daily_loss_limit_pct":     daily_loss_limit_pct,
+        "daily_loss_limit_usd":     round(daily_loss_limit_usd, 2),
+        "daily_loss_consumed_pct":  loss_consumed_pct,
+        "max_position_size_pct":    max_position_pct,
+        "max_open_positions":       max_open_positions,
+        "current_open_positions":   open_positions,
+        "portfolio_usd":            PORTFOLIO,
+    }
 
+
+@mcp.tool()
+def record_decision(secret: str, alert_id: int, action: str) -> dict[str, str]:
+    "Log buy or skip decision for a scanner alert. action must be 'buy' or 'skip'. Requires MCP_SECRET."
+    if not _auth(secret):
+        return {"status": "error", "message": "Invalid secret."}
+    if action not in ("buy", "skip"):
+        return {"status": "error", "message": "action must be 'buy' or 'skip'."}
+    conn = _db_write()
+    conn.execute(
+        "UPDATE meme_alerts SET decision=? WHERE id=?",
+        (action, alert_id),
+    )
+    conn.commit()
+    affected = conn.total_changes
+    conn.close()
+    if affected == 0:
+        return {"status": "error", "message": f"No alert found with id={alert_id}."}
+    now = datetime.now(timezone.utc).isoformat()
+    return {"status": "ok", "alert_id": alert_id, "decision": action, "timestamp_utc": now}
+
+
+@mcp.tool()
+def close_position(secret: str, position_id: int) -> dict[str, str]:
+    """Request a market close for an open position.
+    Writes a flag to bot_config; the bot executes the market sell on its next cycle.
+    Requires MCP_SECRET."""
+    if not _auth(secret):
+        return {"status": "error", "message": "Invalid secret."}
+    rows = _rows(
+        "SELECT id, symbol, chain FROM positions WHERE id=? AND status='open'",
+        (position_id,),
+    )
+    if not rows:
+        return {"status": "error", "message": f"No open position found with id={position_id}."}
+    conn = _db_write()
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT OR REPLACE INTO bot_config (key, value, updated_at) VALUES (?, '1', ?)",
+        (f"close_requested_{position_id}", now),
+    )
+    conn.commit()
+    conn.close()
+    pos = rows[0]
+    return {
+        "status":       "close_requested",
+        "position_id":  position_id,
+        "symbol":       pos["symbol"],
+        "chain":        pos["chain"],
+        "timestamp_utc": now,
+        "note":         "Bot will execute market sell on next cycle.",
+    }
+
+
+@mcp.tool()
+def confirm_rebalance(
+    secret: str, from_platform: str, to_platform: str, amount_usd: float
+) -> dict[str, str]:
+    """Request the yield rebalancer to move stablecoin funds between platforms.
+    Writes a flag to bot_config; the rebalancer executes on its next cycle.
+    Requires MCP_SECRET."""
+    if not _auth(secret):
+        return {"status": "error", "message": "Invalid secret."}
+    if amount_usd <= 0:
+        return {"status": "error", "message": "amount_usd must be positive."}
+    import json as _json
+    now     = datetime.now(timezone.utc).isoformat()
+    payload = _json.dumps({
+        "from_platform": from_platform,
+        "to_platform":   to_platform,
+        "amount_usd":    amount_usd,
+        "requested_at":  now,
+    })
+    conn = _db_write()
+    conn.execute(
+        "INSERT OR REPLACE INTO bot_config (key, value, updated_at) "
+        "VALUES ('rebalance_requested', ?, ?)",
+        (payload, now),
+    )
+    conn.commit()
+    conn.close()
+    return {
+        "status":        "rebalance_requested",
+        "from_platform": from_platform,
+        "to_platform":   to_platform,
+        "amount_usd":    amount_usd,
+        "timestamp_utc": now,
+        "note":          "Yield rebalancer will execute on next cycle.",
+    }
+
+# ---------------------------------------------------------------------------
+# Alpha Channel management
+# ---------------------------------------------------------------------------
+
+def _ensure_alpha_channels_table() -> None:
+    conn = _db_write()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS alpha_channels (
+            channel_id  TEXT PRIMARY KEY,
+            label       TEXT NOT NULL DEFAULT '',
+            added_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            active      INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
+@mcp.tool()
+def manage_alpha_channels(
+    secret: str,
+    action: str,
+    channel_id: str = "",
+    label: str = "",
+) -> dict:
+    """Manage Telegram alpha channels monitored by the social signals layer.
+
+    Actions:
+      list   -- return all channels (active and inactive)
+      add    -- add a new channel (channel_id required; label optional)
+      remove -- deactivate a channel (channel_id required; sets active=0)
+      hits   -- return last 20 alpha hits from alt_data_signals
+    """
+    if not _auth(secret):
+        return {"status": "error", "message": "Invalid secret."}
+
+    _ensure_alpha_channels_table()
+
+    if action == "list":
+        conn = _db()
+        rows = conn.execute(
+            "SELECT channel_id, label, added_at, active FROM alpha_channels ORDER BY added_at DESC"
+        ).fetchall()
+        conn.close()
+        return {"status": "ok", "channels": [dict(r) for r in rows]}
+
+    elif action == "add":
+        if not channel_id:
+            return {"status": "error", "message": "channel_id is required for add."}
+        now = datetime.now(timezone.utc).isoformat()
+        conn = _db_write()
+        existing = conn.execute(
+            "SELECT channel_id, label, active FROM alpha_channels WHERE channel_id = ?",
+            (channel_id,)
+        ).fetchone()
+        if existing:
+            conn.execute(
+                "UPDATE alpha_channels SET active=1, label=?, added_at=? WHERE channel_id=?",
+                (label or existing["label"], now, channel_id),
+            )
+            conn.commit()
+            conn.close()
+            return {"status": "reactivated", "channel_id": channel_id}
+        conn.execute(
+            "INSERT INTO alpha_channels (channel_id, label, added_at, active) VALUES (?, ?, ?, 1)",
+            (channel_id, label or f"Channel {channel_id}", now),
+        )
+        conn.commit()
+        conn.close()
+        return {"status": "added", "channel_id": channel_id, "label": label or f"Channel {channel_id}"}
+
+    elif action == "remove":
+        if not channel_id:
+            return {"status": "error", "message": "channel_id is required for remove."}
+        conn = _db_write()
+        conn.execute("UPDATE alpha_channels SET active=0 WHERE channel_id=?", (channel_id,))
+        conn.commit()
+        conn.close()
+        return {"status": "deactivated", "channel_id": channel_id}
+
+    elif action == "hits":
+        conn = _db()
+        rows = conn.execute(
+            """SELECT timestamp, market_id, description, value, scanner_triggered
+               FROM alt_data_signals
+               WHERE source = 'alpha_channel'
+               ORDER BY timestamp DESC LIMIT 20"""
+        ).fetchall()
+        conn.close()
+        return {"status": "ok", "hits": [dict(r) for r in rows]}
+
+    else:
+        return {"status": "error", "message": f"Unknown action '{action}'. Use list, add, remove, or hits."}
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    mcp.run()
+    print(f"Breadbot MCP server | port={MCP_PORT} | db={DB_PATH}")
+    print(f"Secret configured: {'yes' if MCP_SECRET else 'NO -- set MCP_SECRET in .env'}")
+    mcp.run(transport="streamable-http", host="127.0.0.1", port=MCP_PORT)
