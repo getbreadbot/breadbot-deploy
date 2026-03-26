@@ -73,3 +73,49 @@ defaultValue = "40000"
 name = "GOPLUS_API_KEY"
 description = "GoPlus API key — free at gopluslabs.io, raises rate limits for the scanner"
 required = false
+
+# ── Web Control Panel (panel service) ──────────────────────────────────────
+[[deploy.envVars]]
+name = "MCP_SECRET"
+description = "Shared secret between the bot and the panel — set the same value in both services"
+required = true
+
+[[deploy.envVars]]
+name = "WHOP_API_KEY"
+description = "Whop API key for first-login license validation — create at whop.com → Developer → API Keys"
+required = true
+
+[[deploy.envVars]]
+name = "RAILWAY_API_TOKEN"
+description = "Railway account token for reading/writing bot env vars from the panel — create at railway.app → Account Settings → Tokens"
+required = true
+
+[[deploy.envVars]]
+name = "RAILWAY_PROJECT_ID"
+description = "Your Railway project ID (visible in the project URL: railway.app/project/<id>)"
+required = false
+
+[[deploy.envVars]]
+name = "RAILWAY_SERVICE_ID"
+description = "The Railway service ID of the BOT service (not the panel) — visible in service settings"
+required = false
+
+[[deploy.envVars]]
+name = "PANEL_PASSWORD_HASH"
+description = "Leave blank — auto-set on first login"
+required = false
+
+[[deploy.envVars]]
+name = "VAPID_PRIVATE_KEY"
+description = "Optional — enables browser push notifications when the panel tab is closed"
+required = false
+
+[[deploy.envVars]]
+name = "VAPID_PUBLIC_KEY"
+description = "Optional — see VAPID_PRIVATE_KEY"
+required = false
+
+[[deploy.envVars]]
+name = "VAPID_EMAIL"
+description = "Optional — your email, required if using VAPID push notifications"
+required = false
