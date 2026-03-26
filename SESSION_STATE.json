@@ -1,0 +1,63 @@
+{
+  "updated_at": "2026-03-26T16:22:08.286318+00:00",
+  "github_repo": "getbreadbot/breadbot-deploy",
+  "vps": "76.13.100.34",
+  "services": {
+    "landing": "breadbot.app",
+    "demo": "demo.breadbot.app:8001",
+    "license_server": "keys.breadbot.app:8002",
+    "mcp_server": "mcp.breadbot.app"
+  },
+  "railway": {
+    "template_url": "https://railway.com/deploy/breadbot",
+    "template_id": "1c24c0ab-0cb2-46e8-a4f2-d21ba4bd6ad0",
+    "bot_service_id": "1fa0eb37-cfdc-4774-9d4e-9c5902606d47",
+    "panel_service_id": "691b1fda-aabe-4107-85e4-6220e46b5cd4",
+    "plan": "Hobby"
+  },
+  "modules": {
+    "auto_executor": true,
+    "social_signals": true,
+    "yield_monitor": true,
+    "yield_rebalancer": true,
+    "pendle_connector": true,
+    "robinhood_connector": false,
+    "grid_engine": true,
+    "funding_arb_engine": true,
+    "alt_data_signals": true,
+    "mcp_server": true
+  },
+  "wired": {
+    "auto_executor_in_scanner": true,
+    "social_signals_in_scanner": true,
+    "alpha_monitor_in_main": true,
+    "lst_yields_in_monitor": true,
+    "spark_kamino_in_monitor": true,
+    "jito_in_solana_executor": true,
+    "flashbots_in_evm_executor": true
+  },
+  "pending": {
+    "gemini_connector": "File exists, keys empty \u2014 blocked on support ticket",
+    "social_signals_env": "ARKHAM_API_KEY, ALPHA_CHANNEL_IDS, TELEGRAM_SESSION_STRING not set in .env",
+    "robinhood_connector": "File built, needs ROBINHOOD_USERNAME/PASSWORD in .env + first-login 2FA",
+    "panel_smoke_test": "Deploy fresh template, test first-login flow",
+    "whop_lessons": "Paste lessons 2-6 into Whop course editor",
+    "whop_priority_support": "Enable Priority Support on Professional License in Whop Apps tab"
+  },
+  "sprint_status": {
+    "sprint_0_mev": "DONE \u2014 Jito + Flashbots live",
+    "sprint_0_gemini": "BLOCKED \u2014 waiting on support ticket for API keys",
+    "sprint_1a_auto_execute": "DONE \u2014 wired in scanner.py",
+    "sprint_1b_social": "DONE \u2014 social_signals.py built and live",
+    "sprint_1c_lst_yields": "DONE \u2014 jitoSOL, mSOL, Sanctum INF in yield_monitor",
+    "sprint_1d_spark_kamino": "DONE \u2014 Spark + Kamino in yield_monitor",
+    "sprint_2a_rebalancer": "DONE \u2014 yield_rebalancer.py exists, YIELD_REBALANCE_ENABLED=false",
+    "sprint_2b_pendle": "DONE \u2014 pendle_connector.py exists, PENDLE_ENABLED=false",
+    "sprint_2c_robinhood": "BUILT \u2014 robinhood_connector.py, needs env vars + first-login",
+    "sprint_3a_grid": "DONE \u2014 grid_engine.py exists, GRID_ENABLED=false",
+    "sprint_3b_funding_arb": "DONE \u2014 funding_arb_engine.py exists, FUNDING_ARB_ENABLED=false",
+    "alt_data_signals": "DONE \u2014 alt_data_signals.py live, ALT_DATA_ENABLED=true",
+    "web_panel": "DONE \u2014 built + in deploy repo + Railway template updated",
+    "mcp_12_tools": "DONE \u2014 all 12 panel tools live on VPS"
+  }
+}
