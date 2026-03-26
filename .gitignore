@@ -13,3 +13,4 @@ node_modules/
 *.log
 data/
 secrets/
+SESSION_STATE.json

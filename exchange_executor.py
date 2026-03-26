@@ -74,6 +74,8 @@ def execute_trade(
             return _execute_solana(token_addr, symbol, position_usd, price_usd)
         elif chain == "base":
             return _execute_base(token_addr, symbol, position_usd, price_usd)
+        elif chain == "cex":
+            return _execute_cex(symbol, position_usd)
         else:
             log.warning("execute_trade: unknown chain=%s — skip", chain)
             return False
@@ -180,4 +182,56 @@ def _execute_base(token_addr: str, symbol: str, position_usd: float, price_usd: 
 
     except Exception as exc:
         log.error("Base execution failed for %s: %s", symbol, exc)
+        return False
+
+def _execute_cex(symbol: str, position_usd: float) -> bool:
+    """
+    Execute a market buy on Robinhood Crypto.
+
+    Called when chain="cex" — used for CEX-listed tokens (BTC, ETH, SOL, DOGE, etc.)
+    that are not executed via a DEX route.
+
+    Requires:
+        ROBINHOOD_ENABLED=true
+        ROBINHOOD_USERNAME / ROBINHOOD_PASSWORD in .env
+
+    Returns True on successful order placement. Does not wait for fill confirmation —
+    Robinhood market orders fill asynchronously and are tracked via get_open_orders().
+    """
+    rh = _try_import("robinhood_connector")
+    if rh is None:
+        log.error("robinhood_connector unavailable — cannot execute CEX trade for %s", symbol)
+        return False
+
+    enabled = os.getenv("ROBINHOOD_ENABLED", "false").lower() == "true"
+    if not enabled:
+        log.info("_execute_cex: ROBINHOOD_ENABLED=false — skipping %s", symbol)
+        return False
+
+    username = os.getenv("ROBINHOOD_USERNAME", "").strip()
+    if not username:
+        log.warning("ROBINHOOD_USERNAME not configured — skipping CEX execution for %s", symbol)
+        return False
+
+    try:
+        result = rh.place_crypto_order(
+            symbol=symbol.upper(),
+            side="buy",
+            amount_usd=position_usd,
+            order_type="market",
+        )
+        if result.get("status") == "ok":
+            log.info(
+                "Robinhood execution SUCCESS: %s $%.2f order_id=%s state=%s",
+                symbol, position_usd, result.get("order_id"), result.get("state"),
+            )
+            return True
+        else:
+            log.warning(
+                "Robinhood execution did not succeed: %s — %s",
+                symbol, result.get("message", result.get("status")),
+            )
+            return False
+    except Exception as exc:
+        log.error("CEX execution failed for %s: %s", symbol, exc)
         return False
