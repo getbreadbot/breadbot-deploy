@@ -34,11 +34,107 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
+import sqlite3
 from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
 log = logging.getLogger(__name__)
+
+_DB_PATH = Path(__file__).parent / "breadbot.db"
+
+
+# ── Channel DB helpers ────────────────────────────────────────────────────────
+
+def _ensure_channels_table() -> None:
+    """Create alpha_channels table if it doesn't exist."""
+    with sqlite3.connect(_DB_PATH) as con:
+        con.execute("""
+            CREATE TABLE IF NOT EXISTS alpha_channels (
+                channel_id   TEXT PRIMARY KEY,
+                label        TEXT,
+                added_at     TEXT DEFAULT (datetime('now')),
+                active       INTEGER DEFAULT 1
+            )
+        """)
+        con.commit()
+
+
+def _seed_channels_from_env() -> None:
+    """
+    Seed the alpha_channels table from ALPHA_CHANNEL_IDS env var on first run.
+    Only inserts channels that don't already exist — never overwrites.
+    """
+    _ensure_channels_table()
+    raw = os.getenv("ALPHA_CHANNEL_IDS", "").strip()
+    if not raw:
+        return
+    ids = [c.strip() for c in raw.split(",") if c.strip()]
+    with sqlite3.connect(_DB_PATH) as con:
+        for ch_id in ids:
+            con.execute(
+                "INSERT OR IGNORE INTO alpha_channels (channel_id, label) VALUES (?, ?)",
+                (ch_id, f"Channel {ch_id}")
+            )
+        con.commit()
+
+
+def get_active_channel_ids() -> list[str]:
+    """Return all active channel IDs from the database."""
+    _ensure_channels_table()
+    with sqlite3.connect(_DB_PATH) as con:
+        rows = con.execute(
+            "SELECT channel_id FROM alpha_channels WHERE active = 1"
+        ).fetchall()
+    return [r[0] for r in rows]
+
+
+def add_channel(channel_id: str, label: str = "") -> bool:
+    """Add or re-activate a channel. Returns True if added, False if already active."""
+    _ensure_channels_table()
+    with sqlite3.connect(_DB_PATH) as con:
+        existing = con.execute(
+            "SELECT active FROM alpha_channels WHERE channel_id = ?", (channel_id,)
+        ).fetchone()
+        if existing:
+            if existing[0] == 1:
+                return False  # already active
+            con.execute(
+                "UPDATE alpha_channels SET active = 1, label = ? WHERE channel_id = ?",
+                (label or f"Channel {channel_id}", channel_id)
+            )
+        else:
+            con.execute(
+                "INSERT INTO alpha_channels (channel_id, label) VALUES (?, ?)",
+                (channel_id, label or f"Channel {channel_id}")
+            )
+        con.commit()
+    return True
+
+
+def remove_channel(channel_id: str) -> bool:
+    """Deactivate a channel. Returns True if found and deactivated."""
+    _ensure_channels_table()
+    with sqlite3.connect(_DB_PATH) as con:
+        result = con.execute(
+            "UPDATE alpha_channels SET active = 0 WHERE channel_id = ? AND active = 1",
+            (channel_id,)
+        )
+        con.commit()
+    return result.rowcount > 0
+
+
+def list_channels() -> list[dict]:
+    """Return all channels (active and inactive) with metadata."""
+    _ensure_channels_table()
+    with sqlite3.connect(_DB_PATH) as con:
+        rows = con.execute(
+            "SELECT channel_id, label, added_at, active FROM alpha_channels ORDER BY added_at"
+        ).fetchall()
+    return [
+        {"channel_id": r[0], "label": r[1], "added_at": r[2], "active": bool(r[3])}
+        for r in rows
+    ]
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -182,8 +278,12 @@ async def monitor_alpha_channels() -> None:
     Store the output string in .env as TELEGRAM_SESSION_STRING.
     TG_API_ID and TG_API_HASH come from https://my.telegram.org/apps
     """
-    if not TELEGRAM_SESSION or not ALPHA_CHANNEL_IDS:
-        log.info("social_signals: alpha channel monitor disabled (session or channels not set)")
+    # Seed DB from env var on first run, then use DB as source of truth
+    _seed_channels_from_env()
+    db_channel_ids = get_active_channel_ids()
+
+    if not TELEGRAM_SESSION or not db_channel_ids:
+        log.info("social_signals: alpha channel monitor disabled (session or no active channels)")
         return
 
     try:
@@ -209,7 +309,7 @@ async def monitor_alpha_channels() -> None:
 
         # Resolve channel entities
         channel_entities = []
-        for ch_id in ALPHA_CHANNEL_IDS:
+        for ch_id in db_channel_ids:
             try:
                 entity = await client.get_entity(int(ch_id))
                 channel_entities.append(entity)
@@ -444,3 +544,57 @@ async def handle_alpha_command(client: httpx.AsyncClient, send_fn) -> None:
         lines.append(f"{addr[:20]}...  |  {ch_count} ch{multi}  |  {age_min}m ago")
 
     await send_fn(client, "\n".join(lines))
+
+async def handle_channels_command(parts: list[str], send_fn) -> None:
+    """
+    Handle /channels Telegram command.
+
+    Usage:
+      /channels               — list all monitored channels
+      /channels add <id>      — add a channel by numeric ID
+      /channels add <id> <label> — add with a friendly name
+      /channels remove <id>   — deactivate a channel
+
+    send_fn is the scanner's send_message function.
+    Changes take effect on the next bot restart (Telethon subscribes at startup).
+    The database is updated immediately so the change persists across restarts.
+    """
+    import httpx as _httpx
+    async with _httpx.AsyncClient(timeout=5) as client:
+        if len(parts) == 1:
+            # List channels
+            channels = list_channels()
+            if not channels:
+                await send_fn(client, "No alpha channels configured.")
+                return
+            lines = ["<b>Alpha Channels</b>\n"]
+            for ch in channels:
+                status = "✅" if ch["active"] else "⏸"
+                lines.append(f"{status} <code>{ch['channel_id']}</code>  {ch['label']}")
+            lines.append("\n<i>Changes take effect on next restart.</i>")
+            await send_fn(client, "\n".join(lines))
+
+        elif parts[1] == "add" and len(parts) >= 3:
+            ch_id = parts[2].strip()
+            label = " ".join(parts[3:]) if len(parts) > 3 else ""
+            added = add_channel(ch_id, label)
+            if added:
+                await send_fn(client, f"✅ Channel <code>{ch_id}</code> added. Restart bot to begin monitoring.")
+            else:
+                await send_fn(client, f"Channel <code>{ch_id}</code> is already active.")
+
+        elif parts[1] == "remove" and len(parts) >= 3:
+            ch_id = parts[2].strip()
+            removed = remove_channel(ch_id)
+            if removed:
+                await send_fn(client, f"⏸ Channel <code>{ch_id}</code> deactivated. Restart bot to apply.")
+            else:
+                await send_fn(client, f"Channel <code>{ch_id}</code> not found or already inactive.")
+
+        else:
+            await send_fn(client, (
+                "<b>/channels usage</b>\n"
+                "/channels — list all\n"
+                "/channels add &lt;id&gt; [label] — add channel\n"
+                "/channels remove &lt;id&gt; — deactivate channel"
+            ))

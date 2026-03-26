@@ -47,7 +47,7 @@ from alt_data_signals import (
     handle_signals_command,
     handle_feargreed_command,
 )
-from social_signals import get_social_score_boost, handle_alpha_command
+from social_signals import get_social_score_boost, handle_alpha_command, handle_channels_command
 
 # Engine singletons — shared across poller and main loop
 _grid_engine    = GridEngine()
@@ -752,6 +752,9 @@ async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
         await handle_automode_command(client, args)
     elif cmd == "alpha":
         await handle_alpha_command(client, send_message)
+    elif cmd == "channels":
+        parts = (cmd + (" " + args if args else "")).split()
+        await handle_channels_command(parts, send_message)
     elif cmd == "status":
         await handle_status_command(client)
 
