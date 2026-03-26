@@ -1,5 +1,5 @@
 {
-  "updated_at": "2026-03-26T16:22:08.286318+00:00",
+  "updated_at": "2026-03-26T16:23:49.058028+00:00",
   "github_repo": "getbreadbot/breadbot-deploy",
   "vps": "76.13.100.34",
   "services": {
@@ -21,7 +21,7 @@
     "yield_monitor": true,
     "yield_rebalancer": true,
     "pendle_connector": true,
-    "robinhood_connector": false,
+    "robinhood_connector": true,
     "grid_engine": true,
     "funding_arb_engine": true,
     "alt_data_signals": true,

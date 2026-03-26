@@ -31,8 +31,14 @@ def save(state: dict) -> None:
     print(f"Session state saved to {STATE_FILE}")
 
 
+_IS_VPS = Path("/opt/projects/breadbot").exists()
+_BOT_ROOT = Path("/opt/projects/breadbot") if _IS_VPS else None
+
+
 def check_vps_file(filename: str) -> bool:
-    """Check if a file exists on the VPS."""
+    """Check if a file exists on the VPS (local if running on VPS, SSH otherwise)."""
+    if _IS_VPS and _BOT_ROOT:
+        return (_BOT_ROOT / filename).exists()
     result = subprocess.run(
         ["ssh", "vps", f"test -f /opt/projects/breadbot/{filename} && echo yes || echo no"],
         capture_output=True, text=True, timeout=10
@@ -42,6 +48,11 @@ def check_vps_file(filename: str) -> bool:
 
 def check_vps_grep(filename: str, pattern: str) -> bool:
     """Check if a pattern exists in a VPS file."""
+    if _IS_VPS and _BOT_ROOT:
+        try:
+            return pattern in (_BOT_ROOT / filename).read_text()
+        except Exception:
+            return False
     result = subprocess.run(
         ["ssh", "vps", f"grep -q '{pattern}' /opt/projects/breadbot/{filename} 2>/dev/null && echo yes || echo no"],
         capture_output=True, text=True, timeout=10
