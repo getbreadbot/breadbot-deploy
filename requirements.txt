@@ -10,6 +10,10 @@ coinbase-advanced-py==1.7.0    # Official Coinbase Advanced Trade SDK
 solders>=0.21.0                # Solana keypair, transaction signing
 base58>=2.1.1                  # Private key encoding/decoding
 
+# Drift Protocol (Solana DEX perpetuals — funding arb secondary venue)
+# Guards in drift_connector.py handle ImportError gracefully if omitted.
+driftpy>=0.8.0                 # Drift Protocol Python SDK (brings solana, aiodns, zstandard)
+
 # Base / EVM DEX execution
 web3>=7.0.0                    # Ethereum/Base RPC + contract interaction
 eth-account>=0.13.0            # EVM wallet key management
@@ -20,6 +24,7 @@ python-telegram-bot==21.6      # Telegram notifications and trade approvals
 # HTTP requests for DEXScreener, GoPlus, etc.
 httpx==0.27.2                  # Async HTTP client
 aiohttp==3.10.5                # Async HTTP for concurrent API calls
+requests>=2.31.0               # Sync HTTP (coinbase_connector, alt_data_signals)
 
 # Data handling
 python-dotenv==1.0.1           # Loads your API keys from .env file safely

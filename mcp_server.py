@@ -261,6 +261,38 @@ def daily_pnl() -> dict[str, Any]:
 
 
 @mcp.tool()
+def pnl_history(days: int = 30) -> list[dict]:
+    """Return daily P&L history for the last N days (max 90).
+    Used by the panel Performance page to render the P&L chart."""
+    from datetime import datetime, timezone, timedelta
+    days = min(int(days), 90)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+    rows = _rows(
+        """SELECT date, realized_pnl, unrealized_pnl, yield_earned,
+                  fees_paid, trades_count
+           FROM daily_summary
+           WHERE date >= ?
+           ORDER BY date ASC""",
+        (cutoff,),
+    )
+    out = []
+    cumulative = 0.0
+    for r in rows:
+        net = round(r["realized_pnl"] + r["yield_earned"] - r["fees_paid"], 4)
+        cumulative = round(cumulative + net, 4)
+        out.append({
+            "date":             r["date"],
+            "realized_pnl":     round(r["realized_pnl"],   2),
+            "yield_earned":     round(r["yield_earned"],    2),
+            "fees_paid":        round(r["fees_paid"],       2),
+            "net":              net,
+            "cumulative":       cumulative,
+            "trades":           r["trades_count"],
+        })
+    return out
+
+
+@mcp.tool()
 def get_risk_status() -> dict[str, Any]:
     "Risk manager state: loss limit, position limits, pause state, daily loss consumed."
     daily_loss_limit_pct  = float(os.getenv("DAILY_LOSS_LIMIT_PCT",   "0.05"))

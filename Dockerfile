@@ -4,10 +4,17 @@
 
 FROM python:3.11-slim
 
-# Install gcc for any compiled dependencies (web3, cryptography, etc.)
+# System deps for compiled packages:
+#   gcc, libssl-dev       — cryptography, web3, solders
+#   python3-dev           — any C extension (including driftpy deps)
+#   libc-ares-dev         — pycares (required by aiodns / driftpy)
+#   libzstd-dev           — zstandard (required by driftpy)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libssl-dev \
+    python3-dev \
+    libc-ares-dev \
+    libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

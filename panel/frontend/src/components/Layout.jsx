@@ -16,7 +16,8 @@ const NAV_STRATEGIES = [
 ]
 
 const NAV_SYSTEM = [
-  { to: '/settings', label: 'Settings', icon: '⚙' },
+  { to: '/performance', label: 'Performance', icon: '◈' },
+  { to: '/settings',   label: 'Settings',    icon: '⚙' },
 ]
 
 export default function Layout() {

@@ -251,6 +251,11 @@ async def funding_positions(auth=Depends(verify_session)):
 async def strategy_performance(auth=Depends(verify_session)):
     return await call_tool("get_strategy_performance")
 
+
+@router.get("/pnl/history")
+async def pnl_history(days: int = 30, auth=Depends(verify_session)):
+    return await call_tool("pnl_history", {"days": days})
+
 @router.delete("/channels/{channel_id}")
 async def remove_channel(channel_id: str, auth=Depends(verify_session)):
     return await call_tool("manage_alpha_channels", {
