@@ -12,6 +12,7 @@ import Settings   from './pages/Settings.jsx'
 import Grid        from './pages/Grid.jsx'
 import FundingArb  from './pages/FundingArb.jsx'
 import Performance from './pages/Performance.jsx'
+import SignalChannels from './pages/SignalChannels.jsx'
 import { get } from './lib/api.js'
 
 export default function App() {
@@ -42,13 +43,14 @@ export default function App() {
   )
 
   if (authState === 'setup') return <Setup onComplete={() => setAuthState('authed')} />
-  if (authState === 'login') return <Login onLogin={() => setAuthState('authed')} />
+  if (authState === 'login') return <Login onLogin={() => { setAuthState('authed'); window.location.replace('/dashboard'); }} />
 
   return (
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
+          <Route path="login" element={<Navigate to="/dashboard" replace />} />
           <Route path="dashboard"  element={<Dashboard />} />
           <Route path="alerts"     element={<Alerts />} />
           <Route path="positions"  element={<Positions />} />
@@ -58,6 +60,7 @@ export default function App() {
           <Route path="grid"       element={<Grid />} />
           <Route path="funding"    element={<FundingArb />} />
           <Route path="performance" element={<Performance />} />
+          <Route path="channels"     element={<SignalChannels />} />
         </Route>
       </Routes>
     </BrowserRouter>
