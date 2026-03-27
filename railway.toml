@@ -1,11 +1,11 @@
 [deploy]
 startCommand = "./start.sh"
-healthcheckPath = "/api/status"
-healthcheckTimeout = 60
+healthcheckPath = "/api/health"
+healthcheckTimeout = 90
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 5
 
-# ── Required: Telegram ─────────────────────────────────────────────────────
+# ── Required: Telegram ────────────────────────────────────────────────────
 [[deploy.envVars]]
 name = "TELEGRAM_BOT_TOKEN"
 description = "Your Telegram bot token from @BotFather (looks like 7123456789:AAF...)"
@@ -16,144 +16,144 @@ name = "TELEGRAM_CHAT_ID"
 description = "Your Telegram numeric chat ID from @userinfobot"
 required = true
 
-# ── Required: License ──────────────────────────────────────────────────────
+# ── Required: License ─────────────────────────────────────────────────────
 [[deploy.envVars]]
 name = "LICENSE_KEY"
-description = "Your Breadbot license key (received via email after purchase at breadbot.app)"
+description = "Your Breadbot license key (from your purchase confirmation email)"
 required = true
 
-# ── Exchange API Keys ──────────────────────────────────────────────────────
+# ── Required: Web Panel ───────────────────────────────────────────────────
+[[deploy.envVars]]
+name = "MCP_SECRET"
+description = "Secret key securing the connection between the bot and web panel. Use any strong random string (e.g. openssl rand -hex 32)."
+required = true
+
+[[deploy.envVars]]
+name = "WHOP_API_KEY"
+description = "Whop API key for first-login license validation. Create at whop.com → Developer → API Keys."
+required = true
+
+[[deploy.envVars]]
+name = "RAILWAY_API_TOKEN"
+description = "Railway account token — lets the web panel read and update your bot's settings. Create at railway.app → Account Settings → Tokens."
+required = true
+
+# MCP server runs inside the same container on localhost:8051.
+# Buyers do not need to change this — it is pre-wired.
+[[deploy.envVars]]
+name = "MCP_SERVER_URL"
+description = "Internal address of the bot's MCP server (leave as default — panel and bot run in the same container)."
+required = false
+defaultValue = "http://localhost:8051"
+
+# Railway auto-injects RAILWAY_PROJECT_ID and RAILWAY_SERVICE_ID into every
+# service at runtime. You do not need to set these manually.
+[[deploy.envVars]]
+name = "PANEL_PASSWORD_HASH"
+description = "Leave blank — set automatically when you complete first-login setup in the web panel."
+required = false
+
+[[deploy.envVars]]
+name = "VAPID_PRIVATE_KEY"
+description = "Optional — enables browser push notifications. Leave blank if not needed."
+required = false
+
+[[deploy.envVars]]
+name = "VAPID_PUBLIC_KEY"
+description = "Optional — see VAPID_PRIVATE_KEY."
+required = false
+
+[[deploy.envVars]]
+name = "VAPID_EMAIL"
+description = "Optional — your email address, required only if using VAPID push notifications."
+required = false
+
+# ── Exchange API Keys ─────────────────────────────────────────────────────
 [[deploy.envVars]]
 name = "COINBASE_API_KEY"
-description = "Coinbase Advanced Trade API key — View + Trade permissions only, never Transfer"
+description = "Coinbase Advanced Trade API key — View + Trade permissions only. Never enable Transfer or Withdraw."
 required = false
 
 [[deploy.envVars]]
 name = "COINBASE_API_SECRET"
-description = "Coinbase Advanced Trade API secret"
+description = "Coinbase Advanced Trade API secret."
 required = false
 
 [[deploy.envVars]]
 name = "KRAKEN_API_KEY"
-description = "Kraken API key — Query Funds + Trade permissions only"
+description = "Kraken API key — Query Funds + Trade permissions only."
 required = false
 
 [[deploy.envVars]]
 name = "KRAKEN_API_SECRET"
-description = "Kraken API secret"
+description = "Kraken API secret."
 required = false
 
-# ── Risk Settings (safe defaults, adjust in dashboard after deploy) ─────────
+# ── Risk Settings ─────────────────────────────────────────────────────────
 [[deploy.envVars]]
 name = "MAX_POSITION_SIZE_PCT"
-description = "Max % of portfolio per trade (default 0.02 = 2% on a $5k account = $100/trade)"
+description = "Max % of portfolio per trade. Default 0.02 = 2% (e.g. $100 on a $5k account)."
 required = false
 defaultValue = "0.02"
 
 [[deploy.envVars]]
 name = "DAILY_LOSS_LIMIT_PCT"
-description = "Circuit breaker: pause trading if daily loss hits this % (default 0.05 = 5%)"
+description = "Auto-pause trading if daily losses hit this % of portfolio. Default 0.05 = 5%."
 required = false
 defaultValue = "0.05"
 
 [[deploy.envVars]]
 name = "MIN_LIQUIDITY_USD"
-description = "Minimum token liquidity to send an alert (default $15,000)"
+description = "Minimum token liquidity to generate an alert. Default $15,000."
 required = false
 defaultValue = "15000"
 
 [[deploy.envVars]]
 name = "MIN_VOLUME_24H_USD"
-description = "Minimum 24h volume to send an alert (default $40,000)"
+description = "Minimum 24h trading volume to generate an alert. Default $40,000."
 required = false
 defaultValue = "40000"
 
-# ── Optional: GoPlus (raises rug check rate limits) ────────────────────────
+# ── Optional: Enhanced rug detection ────────────────────────────────────
 [[deploy.envVars]]
 name = "GOPLUS_API_KEY"
-description = "GoPlus API key — free at gopluslabs.io, raises rate limits for the scanner"
+description = "GoPlus API key — free at gopluslabs.io. Raises scanner rate limits."
 required = false
 
-# ── Web Control Panel (panel service) ──────────────────────────────────────
-[[deploy.envVars]]
-name = "MCP_SECRET"
-description = "Shared secret between the bot and the panel — set the same value in both services"
-required = true
-
-[[deploy.envVars]]
-name = "WHOP_API_KEY"
-description = "Whop API key for first-login license validation — create at whop.com → Developer → API Keys"
-required = true
-
-[[deploy.envVars]]
-name = "RAILWAY_API_TOKEN"
-description = "Railway account token for reading/writing bot env vars from the panel — create at railway.app → Account Settings → Tokens"
-required = true
-
-[[deploy.envVars]]
-name = "RAILWAY_PROJECT_ID"
-description = "Your Railway project ID (visible in the project URL: railway.app/project/<id>)"
-required = false
-
-[[deploy.envVars]]
-name = "RAILWAY_SERVICE_ID"
-description = "The Railway service ID of the BOT service (not the panel) — visible in service settings"
-required = false
-
-[[deploy.envVars]]
-name = "PANEL_PASSWORD_HASH"
-description = "Leave blank — auto-set on first login"
-required = false
-
-[[deploy.envVars]]
-name = "VAPID_PRIVATE_KEY"
-description = "Optional — enables browser push notifications when the panel tab is closed"
-required = false
-
-[[deploy.envVars]]
-name = "VAPID_PUBLIC_KEY"
-description = "Optional — see VAPID_PRIVATE_KEY"
-required = false
-
-[[deploy.envVars]]
-name = "VAPID_EMAIL"
-description = "Optional — your email, required if using VAPID push notifications"
-required = false
-
-# ── SOCIAL SIGNALS ─────────────────────────────────────────────────────────────
 [[deploy.envVars]]
 name = "ARKHAM_API_KEY"
-description = "Arkham Intelligence API key — free tier at arkhamintelligence.com. Used for smart-money wallet detection."
+description = "Arkham Intelligence API key — free tier at arkhamintelligence.com. Enables smart-money wallet detection."
+required = false
+
+# ── Optional: Alpha channel monitoring ───────────────────────────────────
+[[deploy.envVars]]
+name = "ALPHA_CHANNEL_IDS"
+description = "Comma-separated Telegram channel IDs to monitor for contract addresses."
 required = false
 
 [[deploy.envVars]]
-name = "ALPHA_CHANNEL_IDS"
-description = "Comma-separated Telegram channel IDs to monitor for contract addresses (e.g. -1001234567890,-1009876543210)"
+name = "TELEGRAM_SESSION_STRING"
+description = "Telethon session string for alpha channel monitoring. Generate once and store here."
+required = false
+
+[[deploy.envVars]]
+name = "TELEGRAM_API_ID"
+description = "Telegram app API ID from my.telegram.org/apps — required for alpha channel monitor."
+required = false
+
+[[deploy.envVars]]
+name = "TELEGRAM_API_HASH"
+description = "Telegram app API hash from my.telegram.org/apps — required for alpha channel monitor."
 required = false
 
 [[deploy.envVars]]
 name = "ALPHA_SIGNAL_BOOST"
-description = "Score boost when a token appears in 2+ alpha channels within 15 minutes (default 8)"
+description = "Score boost when a token appears in 2+ alpha channels within 15 minutes."
 required = false
 defaultValue = "8"
 
 [[deploy.envVars]]
 name = "SMART_MONEY_SIGNAL_BOOST"
-description = "Score boost when a labeled smart-money wallet has bought in via Arkham (default 8)"
+description = "Score boost when a labeled smart-money wallet has bought in via Arkham."
 required = false
 defaultValue = "8"
-
-[[deploy.envVars]]
-name = "TELEGRAM_SESSION_STRING"
-description = "Telethon session string for alpha channel monitoring. Generate once with Telethon and store here."
-required = false
-
-[[deploy.envVars]]
-name = "TELEGRAM_API_ID"
-description = "Telegram app API ID from my.telegram.org/apps — required for alpha channel monitor"
-required = false
-
-[[deploy.envVars]]
-name = "TELEGRAM_API_HASH"
-description = "Telegram app API hash from my.telegram.org/apps — required for alpha channel monitor"
-required = false

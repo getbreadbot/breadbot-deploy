@@ -1,45 +1,55 @@
 # Breadbot — Railway Deployment Dockerfile
-# Runs two processes: the trading bot (main.py) and the dashboard (dashboard/server.py)
-# Buyers set all credentials as Railway environment variables — no .env file needed
+# Single service: runs the trading bot, MCP server, and web control panel together.
+# Buyers access the web panel at the Railway-provided URL.
+# Telegram handles mobile alerts. The panel handles everything else.
 
 FROM python:3.11-slim
 
-# System deps for compiled packages:
-#   gcc, libssl-dev       — cryptography, web3, solders
-#   python3-dev           — any C extension (including driftpy deps)
-#   libc-ares-dev         — pycares (required by aiodns / driftpy)
-#   libzstd-dev           — zstandard (required by driftpy)
+# System dependencies:
+#   gcc, libssl-dev        — cryptography, web3, solders
+#   python3-dev            — C extensions including driftpy deps
+#   libc-ares-dev          — pycares (aiodns, required by driftpy)
+#   libzstd-dev            — zstandard (required by driftpy)
+#   curl                   — used to install Node.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libssl-dev \
     python3-dev \
     libc-ares-dev \
     libzstd-dev \
+    curl \
+    && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+    && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy requirements first so Docker can cache the pip install layer
-# (only re-runs if requirements files change, not on every code change)
-COPY requirements.txt requirements_dashboard.txt ./
-
-# Install all dependencies in a single layer — main bot + dashboard
+# --- Python dependencies ---
+# Copy requirements first so Docker can cache this layer.
+# Only re-runs when requirements files change, not on every code push.
+COPY requirements.txt requirements_dashboard.txt panel/requirements.txt ./panel_requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir -r requirements_dashboard.txt
+    && pip install --no-cache-dir -r panel_requirements.txt
 
-# Copy the full application
+# --- Application code ---
 COPY . .
 
-# Create the data directory that SQLite writes to
-# On Railway, mount a persistent volume at /app/data to survive deploys
+# --- Panel frontend build ---
+# Build the React app so the panel server can serve it as static files.
+# This runs once at image build time — buyers do not need npm installed.
+RUN cd panel/frontend \
+    && npm install \
+    && npm run build \
+    && echo "Panel frontend built successfully"
+
+# --- Data directory ---
+# SQLite writes here. Mount a Railway volume at /app/data for persistence.
 RUN mkdir -p /app/data
 
-# Make the startup script executable
 RUN chmod +x start.sh
 
-# Railway injects $PORT — the dashboard binds to it
-# The trading bot (main.py) does not expose a port
+# Railway injects $PORT. The panel web server binds to it.
 EXPOSE 8000
 
 CMD ["./start.sh"]
