@@ -215,6 +215,42 @@ async def add_channel(payload: AddChannelPayload, auth=Depends(verify_session)):
     })
 
 
+
+# ── Grid trading ──────────────────────────────────────────────────────────────
+
+@router.get("/grid/status")
+async def grid_status(auth=Depends(verify_session)):
+    return await call_tool("get_grid_status")
+
+
+@router.post("/grid/start")
+async def grid_start(auth=Depends(verify_session)):
+    return await call_tool("grid_command", {"subcommand": "start"})
+
+
+@router.post("/grid/stop")
+async def grid_stop(auth=Depends(verify_session)):
+    return await call_tool("grid_command", {"subcommand": "stop"})
+
+
+# ── Funding rate arb ──────────────────────────────────────────────────────────
+
+@router.get("/funding/rates")
+async def funding_rates(auth=Depends(verify_session)):
+    return await call_tool("get_funding_rates")
+
+
+@router.get("/funding/positions")
+async def funding_positions(auth=Depends(verify_session)):
+    return await call_tool("get_funding_positions")
+
+
+# ── Strategy performance ──────────────────────────────────────────────────────
+
+@router.get("/strategy/performance")
+async def strategy_performance(auth=Depends(verify_session)):
+    return await call_tool("get_strategy_performance")
+
 @router.delete("/channels/{channel_id}")
 async def remove_channel(channel_id: str, auth=Depends(verify_session)):
     return await call_tool("manage_alpha_channels", {

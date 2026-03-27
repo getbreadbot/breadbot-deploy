@@ -479,6 +479,163 @@ def manage_alpha_channels(
         return {"status": "error", "message": f"Unknown action '{action}'. Use list, add, remove, or hits."}
 
 
+
+# ---------------------------------------------------------------------------
+# Grid trading tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_grid_status() -> dict:
+    """Return current grid engine state, RSI, price vs range, cycles, profit."""
+    try:
+        from grid_engine import GridEngine, trend_guard, GRID_ENABLED, GRID_PAIR
+        import os
+        conn = _db()
+        session = conn.execute(
+            "SELECT * FROM grid_sessions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        fills = conn.execute(
+            "SELECT COUNT(*) as cnt, SUM(net_profit_usd) as profit FROM grid_fills WHERE session_id = ?",
+            (session["id"] if session else 0,)
+        ).fetchone() if session else None
+        conn.close()
+
+        blocked, rsi = trend_guard(GRID_PAIR)
+        return {
+            "enabled": GRID_ENABLED,
+            "pair": GRID_PAIR,
+            "rsi": round(rsi, 2),
+            "trend_guard_blocked": blocked,
+            "state": session["state"] if session else "STANDBY",
+            "entry_price": session["entry_price"] if session else None,
+            "upper_bound": session["upper_bound"] if session else None,
+            "lower_bound": session["lower_bound"] if session else None,
+            "num_levels": session["num_levels"] if session else int(os.getenv("GRID_NUM_LEVELS", 20)),
+            "allocation_usd": float(os.getenv("GRID_ALLOCATION_USD", 500)),
+            "cycles_completed": fills["cnt"] if fills else 0,
+            "total_profit_usd": round(fills["profit"] or 0, 4) if fills else 0,
+        }
+    except Exception as e:
+        return {"error": str(e), "enabled": False, "state": "STANDBY"}
+
+
+@mcp.tool()
+def grid_command(subcommand: str) -> dict:
+    """Execute a grid command: start or stop."""
+    from grid_engine import GridEngine
+    # Grid engine is a singleton managed by main.py — proxy via scanner module
+    try:
+        from scanner import _grid_engine
+        if subcommand == "start":
+            result = _grid_engine.start()
+        elif subcommand == "stop":
+            result = _grid_engine.stop()
+        else:
+            return {"error": f"Unknown subcommand: {subcommand}"}
+        return {"status": "ok", "message": result}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# Funding rate arb tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_funding_rates() -> dict:
+    """Return current funding rates for all monitored pairs."""
+    try:
+        from funding_arb_engine import get_funding_rates as _get_rates, ARB_PAIRS, ENTRY_THRESHOLD, EXIT_THRESHOLD, ARB_ENABLED
+        rates = _get_rates(ARB_PAIRS)
+        result = []
+        for pair, rate in rates.items():
+            ann = rate * 3 * 365 * 100
+            result.append({
+                "pair": pair,
+                "rate_8h_pct": round(rate * 100, 5),
+                "annualized_pct": round(ann, 2),
+                "above_entry": rate * 100 >= ENTRY_THRESHOLD,
+            })
+        return {
+            "rates": result,
+            "entry_threshold_pct": ENTRY_THRESHOLD,
+            "exit_threshold_pct": EXIT_THRESHOLD,
+            "arb_enabled": ARB_ENABLED,
+        }
+    except Exception as e:
+        return {"error": str(e), "rates": []}
+
+
+@mcp.tool()
+def get_funding_positions() -> dict:
+    """Return open funding arb positions with cumulative income."""
+    try:
+        from funding_arb_engine import db_get_open_positions
+        rows = db_get_open_positions()
+        total = sum(r["funding_collected"] for r in rows)
+        return {"positions": rows, "total_funding_collected_usd": round(total, 4), "count": len(rows)}
+    except Exception as e:
+        return {"error": str(e), "positions": []}
+
+
+# ---------------------------------------------------------------------------
+# Strategy performance summary
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_strategy_performance() -> dict:
+    """Return 30-day P&L summary for all three strategy engines."""
+    from datetime import datetime, timezone, timedelta
+    conn = _db()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+
+    # Grid performance
+    grid = conn.execute(
+        """SELECT COUNT(*) as cycles, SUM(net_profit_usd) as profit,
+           SUM(buy_price * quantity) as volume
+           FROM grid_fills WHERE completed_at > ?""",
+        (cutoff,)
+    ).fetchone()
+
+    # Funding arb performance
+    funding_open = conn.execute(
+        """SELECT COUNT(*) as cnt, SUM(funding_collected) as collected
+           FROM funding_positions WHERE opened_at > ? AND closed_at IS NULL""",
+        (cutoff,)
+    ).fetchone()
+    funding_closed = conn.execute(
+        """SELECT COUNT(*) as cnt, SUM(realized_pnl) as pnl, SUM(funding_collected) as collected
+           FROM funding_positions WHERE opened_at > ? AND closed_at IS NOT NULL""",
+        (cutoff,)
+    ).fetchone()
+
+    # Yield rebalancer
+    rebalance = conn.execute(
+        """SELECT COUNT(*) as cnt, SUM(net_gain_usd) as gain
+           FROM rebalance_events WHERE timestamp > ?""",
+        (cutoff,)
+    ).fetchone()
+
+    conn.close()
+    return {
+        "period_days": 30,
+        "grid": {
+            "cycles": grid["cycles"] or 0,
+            "profit_usd": round(grid["profit"] or 0, 4),
+            "volume_usd": round(grid["volume"] or 0, 2),
+        },
+        "funding_arb": {
+            "open_positions": funding_open["cnt"] or 0,
+            "funding_collected_usd": round((funding_open["collected"] or 0) + (funding_closed["collected"] or 0), 4),
+            "closed_pnl_usd": round(funding_closed["pnl"] or 0, 4),
+        },
+        "yield_rebalancer": {
+            "rebalances": rebalance["cnt"] or 0,
+            "yield_gained_usd": round(rebalance["gain"] or 0, 4),
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------

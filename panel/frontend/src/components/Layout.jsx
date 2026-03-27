@@ -3,13 +3,16 @@ import { useState, useEffect } from 'react'
 import { get, post } from '../lib/api.js'
 
 const NAV = [
-  { to: '/dashboard', label: 'Dashboard',  icon: '▦' },
-  { to: '/alerts',    label: 'Alerts',     icon: '◎', alertBadge: true },
-  { to: '/positions', label: 'Positions',  icon: '◈' },
-  { to: '/yields',    label: 'Yields',     icon: '⟁' },
-  { to: '/controls',  label: 'Controls',   icon: '◉' },
-  { to: '/settings',  label: 'Settings',   icon: '⚙' },
-  { to: '/channels',  label: 'Channels',   icon: '◫' },
+  { to: '/dashboard',   label: 'Dashboard',    icon: '▦', section: 'Operations' },
+  { to: '/alerts',      label: 'Alerts',       icon: '◎', section: null, alertBadge: true },
+  { to: '/positions',   label: 'Positions',    icon: '◈', section: null },
+  { to: '/yields',      label: 'Yields',       icon: '⟁', section: null },
+  { to: '/grid',        label: 'Grid Trading', icon: '⊞', section: 'Strategies' },
+  { to: '/funding',     label: 'Funding Arb',  icon: '⇌', section: null },
+  { to: '/performance', label: 'Performance',  icon: '◱', section: null },
+  { to: '/controls',    label: 'Controls',     icon: '◉', section: 'Config' },
+  { to: '/settings',    label: 'Settings',     icon: '⚙', section: null },
+  { to: '/channels',    label: 'Channels',     icon: '◫', section: null },
 ]
 
 export default function Layout() {
