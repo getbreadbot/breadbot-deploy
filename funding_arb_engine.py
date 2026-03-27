@@ -47,8 +47,24 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 from config import DB_PATH, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TOTAL_PORTFOLIO_USD
-import bybit_connector  as bybit
+import bybit_connector   as bybit
 import binance_connector as binance
+
+# Coinbase CFM — only loaded when FUNDING_ARB_EXCHANGE=coinbase_cfm
+try:
+    import coinbase_connector as coinbase_cfm
+    _COINBASE_AVAILABLE = True
+except ImportError:
+    coinbase_cfm = None  # type: ignore
+    _COINBASE_AVAILABLE = False
+
+# Drift Protocol — only loaded when FUNDING_ARB_EXCHANGE=drift
+try:
+    import drift_connector as drift
+    _DRIFT_AVAILABLE = True
+except ImportError:
+    drift = None  # type: ignore
+    _DRIFT_AVAILABLE = False
 
 log = logging.getLogger(__name__)
 TELEGRAM_BASE = "https://api.telegram.org/bot{token}/{method}"
@@ -215,25 +231,47 @@ def db_get_rate_history(pair: str, limit: int = 24) -> list[dict]:
 
 def get_funding_rates(pairs: list[str]) -> dict[str, float]:
     """
-    Fetch current 8h funding rates from Bybit for all configured pairs.
-    Returns {pair: rate} e.g. {"BTC": 0.0082, "ETH": 0.0091}
-    Rate is the raw 8h figure (multiply by 3*365*100 for annualised %).
-    Falls back to historical average on API failure.
+    Fetch current 8h (or equivalent) funding rates for all configured pairs.
+    Routes to the correct exchange based on FUNDING_ARB_EXCHANGE env var.
+
+    Supported exchanges:
+      bybit         — Bybit V5 perpetuals (default)
+      coinbase_cfm  — Coinbase Financial Markets perpetuals (US-legal)
+      binance       — Binance futures (for reference only, US-blocked)
+
+    Returns {pair: rate} where rate is the 8h-equivalent figure.
+    Falls back to ENTRY_THRESHOLD on API failure.
     """
     rates: dict[str, float] = {}
     for pair in pairs:
-        symbol = f"{pair}USDT"
         try:
-            history = bybit.get_funding_rate(symbol, limit=1)
-            if history:
-                rate = float(history[0].get("fundingRate", 0))
-                rates[pair] = rate
-                log.info("Funding rate %s: %.6f (%.2f%% ann.)",
-                         pair, rate, rate * 3 * 365 * 100)
+            if ARB_EXCHANGE == "coinbase_cfm":
+                if not _COINBASE_AVAILABLE:
+                    log.error("coinbase_connector not available — cannot fetch CFM rates")
+                    rates[pair] = ENTRY_THRESHOLD
+                    continue
+                result = coinbase_cfm.get_funding_rate(pair)
+                rate   = float(result.get("fundingRate", 0))   # already converted to 8h
+            elif ARB_EXCHANGE == "drift":
+                if not _DRIFT_AVAILABLE:
+                    log.error("drift_connector not available — cannot fetch Drift rates")
+                    rates[pair] = ENTRY_THRESHOLD
+                    continue
+                result = drift.get_funding_rate(pair)  # sync wrapper
+                rate   = float(result.get("fundingRate", 0))   # 8h equivalent
             else:
-                rates[pair] = ENTRY_THRESHOLD   # safe fallback
+                # Default: Bybit
+                symbol  = f"{pair}USDT"
+                history = bybit.get_funding_rate(symbol, limit=1)
+                rate    = float(history[0].get("fundingRate", 0)) if history else ENTRY_THRESHOLD
+
+            rates[pair] = rate
+            ann = rate * 3 * 365 * 100
+            log.info("Funding rate %s [%s]: %.6f (%.2f%% ann.)",
+                     pair, ARB_EXCHANGE, rate, ann)
         except Exception as exc:
-            log.warning("Funding rate fetch failed for %s: %s — using fallback", pair, exc)
+            log.warning("Funding rate fetch failed for %s [%s]: %s — using fallback",
+                        pair, ARB_EXCHANGE, exc)
             rates[pair] = ENTRY_THRESHOLD
     return rates
 
@@ -327,6 +365,13 @@ def open_pair_trade(pair: str) -> Optional[FundingPosition]:
     spot_order_id = None
     perp_order_id = None
 
+    if ARB_EXCHANGE == "coinbase_cfm":
+        return _open_pair_cfm(pair, entry_price, quantity)
+
+    if ARB_EXCHANGE == "drift":
+        return _open_pair_drift(pair, entry_price, quantity)
+
+    # ── Bybit / Binance.US path ────────────────────────────────────────────────
     # Leg 1: spot BUY on Binance.US
     try:
         spot_result   = binance.place_order(spot_symbol, "BUY", "MARKET", quantity)
@@ -367,6 +412,143 @@ def open_pair_trade(pair: str) -> Optional[FundingPosition]:
     return position
 
 
+def _open_pair_drift(pair: str, entry_price: float, quantity: float) -> Optional[FundingPosition]:
+    """
+    Open a funding arb pair using Drift Protocol for both legs.
+
+    Spot leg:  BUY on Jupiter V6 via solana_executor (USDC → base token)
+    Perp leg:  SHORT on Drift Protocol (delta-neutral, unified cross-margin)
+
+    The spot token is held in the wallet. The perp short hedges price exposure.
+    Both use the existing Solana wallet keypair — no new accounts needed.
+    Requires USDC in the wallet for spot buy AND deposited in Drift for perp margin.
+    """
+    if not _DRIFT_AVAILABLE:
+        log.error("_open_pair_drift: drift_connector not available")
+        return None
+
+    spot_symbol = f"{pair}USDT"   # logical identifier
+    perp_symbol = f"{pair}-PERP"
+    size_usd    = quantity * entry_price  # USD notional for each leg
+
+    spot_order_id = None
+    perp_order_id = None
+
+    # Leg 1: spot BUY via Jupiter V6 on Solana
+    try:
+        import solana_executor
+        USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+        SOL_MINTS = {
+            "SOL": "So11111111111111111111111111111111111111112",
+            "BTC": "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",  # BTC (wBTC)
+            "ETH": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",  # ETH (wETH)
+        }
+        token_mint = SOL_MINTS.get(pair.upper())
+        if not token_mint:
+            log.error("_open_pair_drift: no SPL mint for %s", pair)
+            return None
+        usdc_lamports = int(size_usd * 1_000_000)
+        quote    = solana_executor.get_quote(USDC_MINT, token_mint, usdc_lamports)
+        tx_b64   = solana_executor.build_swap_tx(quote)
+        sig      = solana_executor.sign_and_send(tx_b64)
+        confirmed = solana_executor.confirm_tx(sig)
+        spot_order_id = sig
+        if not confirmed:
+            log.critical("_open_pair_drift: spot tx not confirmed for %s — no perp opened", pair)
+            return None
+        log.info("Drift spot BUY (Jupiter): %s $%.2f sig=%s", pair, size_usd, sig)
+    except Exception as exc:
+        log.critical("_open_pair_drift spot leg FAILED for %s: %s", pair, exc)
+        return None
+
+    # Leg 2: perp SHORT on Drift (sync wrapper)
+    try:
+        result = drift.open_short_perp_sync(pair, size_usd)
+        if not result.get("success"):
+            raise RuntimeError(result.get("error", "unknown error"))
+        perp_order_id = result.get("tx_sig", "")
+        log.info("Drift perp SHORT: %s $%.2f sig=%s", pair, size_usd, perp_order_id)
+    except Exception as exc:
+        log.critical(
+            "_open_pair_drift perp leg FAILED for %s: %s — spot LONG not hedged. "
+            "MANUAL ACTION REQUIRED: sell %s spot position", pair, exc, pair
+        )
+        return None
+
+    pos_id   = db_open_position(pair, spot_symbol, perp_symbol, entry_price, quantity)
+    position = FundingPosition(
+        db_id         = pos_id,
+        pair          = pair,
+        spot_symbol   = spot_symbol,
+        perp_symbol   = perp_symbol,
+        entry_price   = entry_price,
+        quantity      = quantity,
+        spot_order_id = spot_order_id,
+        perp_order_id = perp_order_id,
+    )
+    log.info("Drift arb pair opened: pos_id=%d %s entry=%.2f qty=%.6f",
+             pos_id, pair, entry_price, quantity)
+    return position
+
+
+def _open_pair_cfm(pair: str, entry_price: float, quantity: float) -> Optional[FundingPosition]:
+    """
+    Open a funding arb pair using Coinbase CFM for both legs.
+    Both spot and perp are on Coinbase — no cross-exchange capital split.
+
+    Spot leg:  BUY on Coinbase Advanced Trade (BTC-USDC / ETH-USDC)
+    Perp leg:  SHORT on Coinbase CFM (BTC-PERP-INTX / ETH-PERP-INTX)
+    """
+    if not _COINBASE_AVAILABLE:
+        log.error("_open_pair_cfm: coinbase_connector not available")
+        return None
+
+    spot_symbol = f"{pair}USDT"   # used as logical identifier; CB uses BTC-USDC
+    perp_symbol = f"{pair}-PERP-INTX"
+    base_size   = str(round(quantity, 8))
+
+    spot_order_id = None
+    perp_order_id = None
+
+    # Leg 1: spot BUY on Coinbase Advanced Trade
+    try:
+        product_id  = f"{pair}-USDC"
+        spot_result = coinbase_cfm.place_spot_order(product_id, "BUY", base_size)
+        spot_order_id = str(spot_result.get("order_id", ""))
+        log.info("CB spot BUY placed: %s orderId=%s", product_id, spot_order_id)
+    except Exception as exc:
+        log.critical("CFM spot leg FAILED for %s: %s — no perp placed", pair, exc)
+        return None
+
+    # Leg 2: perp SHORT on Coinbase CFM (1x leverage, delta-neutral)
+    try:
+        perp_result   = coinbase_cfm.place_perp_order(pair, "SELL", quantity, leverage=1)
+        perp_order_id = str(perp_result.get("order_id", ""))
+        log.info("CFM perp SELL placed: %s orderId=%s", perp_symbol, perp_order_id)
+    except Exception as exc:
+        log.critical(
+            "CFM perp leg FAILED for %s: %s — spot LONG not hedged. "
+            "MANUAL ACTION REQUIRED: close CB spot position %s qty=%s",
+            pair, exc, f"{pair}-USDC", base_size,
+        )
+        return None
+
+    pos_id   = db_open_position(pair, spot_symbol, perp_symbol, entry_price, quantity)
+    position = FundingPosition(
+        db_id         = pos_id,
+        pair          = pair,
+        spot_symbol   = spot_symbol,
+        perp_symbol   = perp_symbol,
+        entry_price   = entry_price,
+        quantity      = quantity,
+        spot_order_id = spot_order_id,
+        perp_order_id = perp_order_id,
+    )
+    log.info("CFM arb pair opened: pos_id=%d %s entry=%.2f qty=%.6f",
+             pos_id, pair, entry_price, quantity)
+    return position
+
+
 def close_pair_trade(pos: FundingPosition, reason: str) -> float:
     """
     Close both legs of a funding arb pair.
@@ -375,20 +557,67 @@ def close_pair_trade(pos: FundingPosition, reason: str) -> float:
     """
     log.info("Closing arb pair: %s pos_id=%d reason=%s", pos.pair, pos.db_id, reason)
 
-    # Spot SELL
-    try:
-        binance.place_order(pos.spot_symbol, "SELL", "MARKET", pos.quantity)
-        log.info("Spot SELL executed: %s qty=%.6f", pos.spot_symbol, pos.quantity)
-    except Exception as exc:
-        log.error("Spot close failed for %s: %s", pos.pair, exc)
+    if ARB_EXCHANGE == "drift" and _DRIFT_AVAILABLE:
+        # ── Drift Protocol close path ──────────────────────────────────────────
+        # Spot SELL via Jupiter V6
+        try:
+            import solana_executor
+            SOL_MINTS = {
+                "SOL": "So11111111111111111111111111111111111111112",
+                "BTC": "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",
+                "ETH": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+            }
+            USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+            token_mint = SOL_MINTS.get(pos.pair.upper())
+            if token_mint:
+                token_lamports = int(pos.quantity * 1_000_000_000)
+                quote    = solana_executor.get_quote(token_mint, USDC_MINT, token_lamports)
+                tx_b64   = solana_executor.build_swap_tx(quote)
+                sig      = solana_executor.sign_and_send(tx_b64)
+                solana_executor.confirm_tx(sig)
+                log.info("Drift spot SELL (Jupiter): %s sig=%s", pos.pair, sig)
+        except Exception as exc:
+            log.error("Drift spot close failed for %s: %s", pos.pair, exc)
+        # Perp close on Drift
+        try:
+            from drift_connector import MARKET_INDEX
+            midx   = MARKET_INDEX.get(pos.pair.upper(), -1)
+            result = drift.close_perp_position_sync(midx)
+            log.info("Drift perp close: %s result=%s", pos.pair, result)
+        except Exception as exc:
+            log.error("Drift perp close failed for %s: %s", pos.pair, exc)
 
-    # Perp BUY (close short)
-    try:
-        bybit.place_perp_order(pos.perp_symbol, "Buy", pos.quantity,
-                               order_type="Market", reduce_only=True)
-        log.info("Perp BUY (close) executed: %s qty=%.6f", pos.perp_symbol, pos.quantity)
-    except Exception as exc:
-        log.error("Perp close failed for %s: %s", pos.pair, exc)
+    elif ARB_EXCHANGE == "coinbase_cfm" and _COINBASE_AVAILABLE:
+        # ── Coinbase CFM close path ────────────────────────────────────────────
+        # Spot SELL on Coinbase Advanced Trade
+        try:
+            product_id = f"{pos.pair}-USDC"
+            coinbase_cfm.place_spot_order(product_id, "SELL", str(round(pos.quantity, 8)))
+            log.info("CB spot SELL executed: %s qty=%.6f", product_id, pos.quantity)
+        except Exception as exc:
+            log.error("CB spot close failed for %s: %s", pos.pair, exc)
+        # Perp BUY (reduce-only) on Coinbase CFM
+        try:
+            coinbase_cfm.close_perp_position(pos.pair)
+            log.info("CFM perp close executed: %s", pos.pair)
+        except Exception as exc:
+            log.error("CFM perp close failed for %s: %s", pos.pair, exc)
+    else:
+        # ── Default: Bybit / Binance.US close path ─────────────────────────────
+        # Spot SELL
+        try:
+            binance.place_order(pos.spot_symbol, "SELL", "MARKET", pos.quantity)
+            log.info("Spot SELL executed: %s qty=%.6f", pos.spot_symbol, pos.quantity)
+        except Exception as exc:
+            log.error("Spot close failed for %s: %s", pos.pair, exc)
+
+        # Perp BUY (close short)
+        try:
+            bybit.place_perp_order(pos.perp_symbol, "Buy", pos.quantity,
+                                   order_type="Market", reduce_only=True)
+            log.info("Perp BUY (close) executed: %s qty=%.6f", pos.perp_symbol, pos.quantity)
+        except Exception as exc:
+            log.error("Perp close failed for %s: %s", pos.pair, exc)
 
     # PnL estimate: funding collected is the primary return
     # Spread cost is typically 0.02-0.06% round-trip on liquid pairs

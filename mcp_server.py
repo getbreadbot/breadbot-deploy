@@ -556,11 +556,23 @@ def get_funding_rates() -> dict:
                 "annualized_pct": round(ann, 2),
                 "above_entry": rate * 100 >= ENTRY_THRESHOLD,
             })
+        import os as _os
+        arb_exchange = _os.getenv("FUNDING_ARB_EXCHANGE", "bybit").lower()
+        _VENUE_DISPLAY = {
+            "coinbase_cfm": {"label": "Coinbase CFM", "legal_us": True,  "color": "green"},
+            "drift":        {"label": "Drift Protocol","legal_us": None,  "color": "amber"},
+            "bybit":        {"label": "Bybit",         "legal_us": False, "color": "red"},
+        }
+        venue = _VENUE_DISPLAY.get(arb_exchange, {"label": arb_exchange, "legal_us": None, "color": "amber"})
         return {
             "rates": result,
             "entry_threshold_pct": ENTRY_THRESHOLD,
             "exit_threshold_pct": EXIT_THRESHOLD,
             "arb_enabled": ARB_ENABLED,
+            "arb_exchange": arb_exchange,
+            "venue_label": venue["label"],
+            "venue_legal_us": venue["legal_us"],
+            "venue_color": venue["color"],
         }
     except Exception as e:
         return {"error": str(e), "rates": []}

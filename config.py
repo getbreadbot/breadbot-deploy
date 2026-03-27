@@ -74,6 +74,9 @@ TELEGRAM_CHAT_ID    = _str_config("telegram_chat_id",   "TELEGRAM_CHAT_ID")
 # ── Exchange API keys ──────────────────────────────────────
 COINBASE_API_KEY    = _str_config("coinbase_api_key",    "COINBASE_API_KEY")
 COINBASE_API_SECRET = _str_config("coinbase_api_secret", "COINBASE_API_SECRET")
+COINBASE_PERP_ENABLED = os.getenv("COINBASE_PERP_ENABLED", "false").lower() == "true"
+DRIFT_ENABLED      = os.getenv("DRIFT_ENABLED", "false").lower() == "true"
+DRIFT_MARKET_PAIRS = os.getenv("DRIFT_MARKET_PAIRS", "BTC,ETH,SOL").strip()
 KRAKEN_API_KEY      = _str_config("kraken_api_key",      "KRAKEN_API_KEY")
 KRAKEN_API_SECRET   = _str_config("kraken_api_secret",   "KRAKEN_API_SECRET")
 

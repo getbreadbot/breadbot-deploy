@@ -7,25 +7,29 @@ import Dashboard from './pages/Dashboard.jsx'
 import Alerts from './pages/Alerts.jsx'
 import Positions from './pages/Positions.jsx'
 import Yields from './pages/Yields.jsx'
-import Grid from './pages/Grid.jsx'
-import FundingArb from './pages/FundingArb.jsx'
-import Performance from './pages/Performance.jsx'
 import Controls from './pages/Controls.jsx'
-import Settings from './pages/Settings.jsx'
-import Channels from './pages/Channels.jsx'
+import Settings   from './pages/Settings.jsx'
+import Grid       from './pages/Grid.jsx'
+import FundingArb from './pages/FundingArb.jsx'
+import { get } from './lib/api.js'
 
 export default function App() {
-  const [authState, setAuthState] = useState('loading')
+  const [authState, setAuthState] = useState('loading') // loading | setup | login | authed
 
   useEffect(() => {
     async function check() {
       try {
+        // Check if panel is configured (password has been set)
         const status = await fetch('/api/auth/status').then(r => r.json())
         if (!status.configured) { setAuthState('setup'); return }
+
+        // Check if current session is valid
         const me = await fetch('/api/auth/me', { credentials: 'include' })
-        if (me.ok) setAuthState('authed')
-        else setAuthState('login')
-      } catch { setAuthState('login') }
+        if (me.ok) { setAuthState('authed') }
+        else { setAuthState('login') }
+      } catch {
+        setAuthState('login')
+      }
     }
     check()
   }, [])
@@ -44,16 +48,14 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Layout />}>
           <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard"   element={<Dashboard />} />
-          <Route path="alerts"      element={<Alerts />} />
-          <Route path="positions"   element={<Positions />} />
-          <Route path="yields"      element={<Yields />} />
-          <Route path="grid"        element={<Grid />} />
-          <Route path="funding"     element={<FundingArb />} />
-          <Route path="performance" element={<Performance />} />
-          <Route path="controls"    element={<Controls />} />
-          <Route path="settings"    element={<Settings />} />
-          <Route path="channels"    element={<Channels />} />
+          <Route path="dashboard"  element={<Dashboard />} />
+          <Route path="alerts"     element={<Alerts />} />
+          <Route path="positions"  element={<Positions />} />
+          <Route path="yields"     element={<Yields />} />
+          <Route path="controls"   element={<Controls />} />
+          <Route path="settings"   element={<Settings />} />
+          <Route path="grid"       element={<Grid />} />
+          <Route path="funding"    element={<FundingArb />} />
         </Route>
       </Routes>
     </BrowserRouter>

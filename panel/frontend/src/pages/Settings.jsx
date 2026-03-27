@@ -39,49 +39,7 @@ const BASIC_FIELDS = [
   },
 ]
 
-const STRATEGY_TOGGLES = [
-  {
-    key: 'YIELD_REBALANCE_ENABLED',
-    label: 'Yield rebalancer',
-    desc: 'Monitors APY spread across platforms and recommends or auto-moves USDC to the highest yield.',
-    mode_key: 'YIELD_REBALANCE_MODE',
-    mode_options: ['alert', 'auto'],
-  },
-  {
-    key: 'GRID_ENABLED',
-    label: 'Grid trading',
-    desc: 'Places a buy/sell ladder on BTC/USDT. Profits from sideways price oscillation. Trend guard blocks activation in directional markets.',
-  },
-  {
-    key: 'FUNDING_ARB_ENABLED',
-    label: 'Funding rate arb',
-    desc: 'Long spot + short perp on BTC/ETH. Market-neutral. Collects funding payments every 8 hours. Requires funded Bybit account.',
-  },
-  {
-    key: 'PENDLE_ENABLED',
-    label: 'Pendle fixed yield',
-    desc: 'Lock in a fixed APY on stablecoins for a defined term using Pendle Finance on Base.',
-  },
-  {
-    key: 'ROBINHOOD_ENABLED',
-    label: 'Robinhood connector',
-    desc: 'Execute crypto trades through Robinhood. Session-based auth — requires one-time 2FA setup.',
-  },
-]
-
 const ADVANCED_GROUPS = [
-  {
-    label: 'Grid trading config',
-    keys: ['GRID_PAIR', 'GRID_ALLOCATION_USD', 'GRID_NUM_LEVELS', 'GRID_UPPER_PCT', 'GRID_LOWER_PCT', 'GRID_EXCHANGE'],
-  },
-  {
-    label: 'Funding arb config',
-    keys: ['FUNDING_ARB_PAIRS', 'FUNDING_ARB_ALLOCATION_PCT', 'FUNDING_RATE_ENTRY_THRESHOLD', 'FUNDING_RATE_EXIT_THRESHOLD', 'FUNDING_ARB_EXCHANGE'],
-  },
-  {
-    label: 'Yield rebalancer config',
-    keys: ['REBALANCE_THRESHOLD_PCT', 'REBALANCE_MIN_AMOUNT_USD', 'REBALANCE_MAX_GAS_USD'],
-  },
   {
     label: 'Coinbase',
     keys: ['COINBASE_API_KEY', 'COINBASE_SECRET_KEY'],
@@ -109,6 +67,16 @@ const ADVANCED_GROUPS = [
   {
     label: 'RPC endpoints',
     keys: ['SOLANA_RPC_URL', 'EVM_BASE_RPC_URL'],
+  },
+  {
+    label: 'Coinbase CFM perpetuals',
+    keys: ['COINBASE_PERP_ENABLED'],
+    note: 'CFTC-regulated — recommended venue for US residents. Enable to use Coinbase for funding arb.',
+  },
+  {
+    label: 'Drift Protocol',
+    keys: ['DRIFT_ENABLED', 'DRIFT_MARKET_PAIRS'],
+    note: 'Decentralised perpetuals on Solana. No KYC. Uses existing Solana wallet. User assumes regulatory responsibility.',
   },
 ]
 
@@ -263,69 +231,7 @@ export default function Settings() {
         </div>
       </form>
 
-      {/* Strategy toggles */}
-      <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-title">Strategy activation</div>
-        <div style={{ fontSize: 13, color: 'var(--text-2)', marginBottom: 16 }}>
-          Enable each strategy engine. Changes take effect on the next bot cycle.
-        </div>
-        {STRATEGY_TOGGLES.map(s => {
-          const isEnabled = (basic[s.key] || '').toLowerCase() === 'true'
-          const mode = basic[s.mode_key] || 'alert'
-          return (
-            <div key={s.key} style={{
-              padding: '14px 0',
-              borderBottom: '1px solid var(--border)',
-            }}>
-              <div className="toggle-row" style={{ marginBottom: 6 }}>
-                <label className="toggle">
-                  <input
-                    type="checkbox"
-                    checked={isEnabled}
-                    onChange={e => {
-                      update(s.key, e.target.checked ? 'true' : 'false')
-                    }}
-                  />
-                  <span className="toggle-slider" />
-                </label>
-                <div>
-                  <div className="toggle-label">{s.label}</div>
-                  <div className="toggle-desc">{s.desc}</div>
-                </div>
-              </div>
-              {s.mode_key && isEnabled && (
-                <div style={{ display: 'flex', gap: 8, paddingLeft: 48, marginTop: 8 }}>
-                  {s.mode_options.map(opt => (
-                    <label key={opt} style={{
-                      display: 'flex', alignItems: 'center', gap: 6,
-                      padding: '5px 12px',
-                      borderRadius: 'var(--radius)',
-                      border: `1px solid ${mode === opt ? 'var(--amber-dim)' : 'var(--border)'}`,
-                      background: mode === opt ? 'var(--amber-glow)' : 'transparent',
-                      cursor: 'pointer', fontSize: 12,
-                    }}>
-                      <input
-                        type="radio"
-                        name={s.mode_key}
-                        value={opt}
-                        checked={mode === opt}
-                        onChange={() => update(s.mode_key, opt)}
-                        style={{ accentColor: 'var(--amber)' }}
-                      />
-                      {opt.charAt(0).toUpperCase() + opt.slice(1)}
-                    </label>
-                  ))}
-                  <span style={{ fontSize: 11, color: 'var(--text-3)', lineHeight: '26px' }}>
-                    {mode === 'alert' ? 'Sends a Telegram recommendation. You confirm before funds move.' : 'Moves funds automatically when spread exceeds threshold.'}
-                  </span>
-                </div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-
-            {/* Advanced */}
+      {/* Advanced */}
       <div className="card">
         <div
           style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}
@@ -362,11 +268,16 @@ export default function Settings() {
                   letterSpacing: '0.08em',
                   textTransform: 'uppercase',
                   color: 'var(--text-3)',
-                  marginBottom: 10,
+                  marginBottom: group.note ? 6 : 10,
                   marginTop: 10,
                 }}>
                   {group.label}
                 </div>
+                {group.note && (
+                  <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 10, lineHeight: 1.5 }}>
+                    {group.note}
+                  </div>
+                )}
                 {group.keys.map(k => (
                   <AdvancedField
                     key={k}
@@ -374,6 +285,17 @@ export default function Settings() {
                     setKey={advancedMeta?.set?.[k]}
                   />
                 ))}
+                {['Coinbase', 'Kraken', 'Bybit', 'Binance.US', 'Gemini'].includes(group.label) && (
+                  <div style={{
+                    fontSize: 11,
+                    color: 'var(--text-3)',
+                    marginTop: 6,
+                    paddingTop: 6,
+                    borderTop: '1px solid var(--border)',
+                  }}>
+                    By connecting this exchange, you confirm you have the legal right to use it in your jurisdiction.
+                  </div>
+                )}
               </div>
             ))}
           </>

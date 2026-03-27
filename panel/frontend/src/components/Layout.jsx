@@ -2,17 +2,21 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { get, post } from '../lib/api.js'
 
-const NAV = [
-  { to: '/dashboard',   label: 'Dashboard',    icon: '▦', section: 'Operations' },
-  { to: '/alerts',      label: 'Alerts',       icon: '◎', section: null, alertBadge: true },
-  { to: '/positions',   label: 'Positions',    icon: '◈', section: null },
-  { to: '/yields',      label: 'Yields',       icon: '⟁', section: null },
-  { to: '/grid',        label: 'Grid Trading', icon: '⊞', section: 'Strategies' },
-  { to: '/funding',     label: 'Funding Arb',  icon: '⇌', section: null },
-  { to: '/performance', label: 'Performance',  icon: '◱', section: null },
-  { to: '/controls',    label: 'Controls',     icon: '◉', section: 'Config' },
-  { to: '/settings',    label: 'Settings',     icon: '⚙', section: null },
-  { to: '/channels',    label: 'Channels',     icon: '◫', section: null },
+const NAV_OPERATIONS = [
+  { to: '/dashboard', label: 'Dashboard',  icon: '▦' },
+  { to: '/alerts',    label: 'Alerts',     icon: '◎', alertBadge: true },
+  { to: '/positions', label: 'Positions',  icon: '◈' },
+  { to: '/yields',    label: 'Yields',     icon: '⟁' },
+  { to: '/controls',  label: 'Controls',   icon: '◉' },
+]
+
+const NAV_STRATEGIES = [
+  { to: '/grid',    label: 'Grid Trading', icon: '⊞' },
+  { to: '/funding', label: 'Funding Arb',  icon: '⇄' },
+]
+
+const NAV_SYSTEM = [
+  { to: '/settings', label: 'Settings', icon: '⚙' },
 ]
 
 export default function Layout() {
@@ -77,7 +81,7 @@ export default function Layout() {
 
       <nav className="nav">
         <div className="nav-section">Operations</div>
-        {NAV.map(item => (
+        {NAV_OPERATIONS.map(item => (
           <NavLink
             key={item.to}
             to={item.to}
@@ -90,11 +94,58 @@ export default function Layout() {
             )}
           </NavLink>
         ))}
+        <div className="nav-section" style={{ marginTop: 10 }}>Strategies</div>
+        {NAV_STRATEGIES.map(item => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+          >
+            <span style={{ fontSize: 12, opacity: 0.7 }}>{item.icon}</span>
+            {item.label}
+          </NavLink>
+        ))}
+        <div className="nav-section" style={{ marginTop: 10 }}>System</div>
+        {NAV_SYSTEM.map(item => (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
+          >
+            <span style={{ fontSize: 12, opacity: 0.7 }}>{item.icon}</span>
+            {item.label}
+          </NavLink>
+        ))}
       </nav>
 
       <main className="main">
         <Outlet />
       </main>
+
+      <footer style={{
+        gridArea: 'main',
+        borderTop: '1px solid var(--border)',
+        padding: '10px 20px',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 16,
+        fontSize: 11,
+        color: 'var(--text-3)',
+      }}>
+        <a
+          href="/terms.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          style={{ color: 'var(--text-3)', textDecoration: 'none' }}
+          onMouseOver={e => e.target.style.color = 'var(--amber)'}
+          onMouseOut={e => e.target.style.color = 'var(--text-3)'}
+        >
+          Terms of Service
+        </a>
+        <span style={{ opacity: 0.4 }}>|</span>
+        <span>Breadbot LLC &copy; 2026</span>
+      </footer>
     </div>
   )
 }

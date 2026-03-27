@@ -1,100 +1,232 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { get } from '../lib/api.js'
 
-function RateBar({ rate, threshold, max = 0.05 }) {
-  const pct = Math.min(100, (Math.abs(rate) / max) * 100)
-  const aboveThreshold = rate >= threshold
-  const isPositive = rate >= 0
+const VENUE_COLORS = {
+  green: { dot: 'green', bg: 'rgba(16,185,129,0.08)', border: 'rgba(16,185,129,0.25)' },
+  amber: { dot: 'amber', bg: 'rgba(240,180,41,0.08)', border: 'rgba(240,180,41,0.25)' },
+  red:   { dot: 'red',   bg: 'rgba(239,68,68,0.08)',  border: 'rgba(239,68,68,0.25)' },
+}
+
+function VenueBadge({ label, color, legalUs }) {
+  const c = VENUE_COLORS[color] || VENUE_COLORS.amber
+  const legalText = legalUs === true ? 'US legal' : legalUs === false ? 'US geo-blocked' : 'DEX — user responsibility'
+  const legalColor = legalUs === true ? 'var(--green)' : legalUs === false ? 'var(--red, #ef4444)' : 'var(--amber)'
   return (
-    <div style={{ flex: 1, height: 8, background: 'var(--bg-2)', borderRadius: 4, overflow: 'hidden' }}>
-      <div style={{ width: `${pct}%`, height: '100%', borderRadius: 4, background: aboveThreshold ? 'var(--green)' : (isPositive ? 'var(--amber)' : '#f87171'), transition: 'width 0.4s ease' }} />
+    <div style={{
+      display: 'inline-flex', alignItems: 'center', gap: 10,
+      background: c.bg, border: `1px solid ${c.border}`,
+      borderRadius: 8, padding: '10px 16px',
+    }}>
+      <div className={`dot ${c.dot}`} style={{ width: 10, height: 10 }} />
+      <span style={{ fontWeight: 600, fontSize: 15 }}>{label}</span>
+      <span style={{ fontSize: 12, color: legalColor, marginLeft: 4 }}>{legalText}</span>
     </div>
   )
 }
 
+function RateRow({ r, threshold }) {
+  const above = r.above_entry
+  return (
+    <tr>
+      <td style={{ fontWeight: 600 }}>{r.pair}/USDT</td>
+      <td className="mono" style={{ color: r.rate_8h_pct >= 0 ? 'var(--green)' : 'var(--red, #ef4444)' }}>
+        {r.rate_8h_pct >= 0 ? '+' : ''}{r.rate_8h_pct.toFixed(4)}%
+      </td>
+      <td className="mono">{r.annualized_pct.toFixed(2)}%</td>
+      <td>
+        {above
+          ? <span className="tag tag-green">Above threshold</span>
+          : <span className="tag" style={{ background: 'var(--bg-3)', color: 'var(--text-3)' }}>Below threshold</span>
+        }
+      </td>
+    </tr>
+  )
+}
+
+function PositionRow({ p }) {
+  const pnl = p.funding_collected - 0
+  return (
+    <tr>
+      <td style={{ fontWeight: 600 }}>{p.pair}/USDT</td>
+      <td className="mono">${p.entry_price?.toLocaleString('en-US', { maximumFractionDigits: 2 }) ?? '—'}</td>
+      <td className="mono">{p.quantity?.toFixed(6) ?? '—'}</td>
+      <td className="mono" style={{ color: 'var(--green)' }}>
+        ${p.funding_collected?.toFixed(4) ?? '0.0000'}
+      </td>
+      <td style={{ color: 'var(--text-3)', fontSize: 12 }}>{p.opened_at?.slice(0, 10) ?? '—'}</td>
+    </tr>
+  )
+}
+
 export default function FundingArb() {
-  const [rates, setRates] = useState(null)
+  const [rates, setRates]         = useState(null)
   const [positions, setPositions] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState('')
 
-  async function load() {
+  const load = useCallback(async () => {
     try {
-      const [r, p] = await Promise.all([get('/bot/funding/rates'), get('/bot/funding/positions')])
-      setRates(r); setPositions(p); setError(null)
-    } catch { setError('Could not reach bot.') }
-    setLoading(false)
-  }
+      const [r, p] = await Promise.all([
+        get('/bot/funding/rates'),
+        get('/bot/funding/positions'),
+      ])
+      setRates(r)
+      setPositions(p)
+      setError('')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoading(false)
+    }
+  }, [])
 
-  useEffect(() => { load(); const iv = setInterval(load, 60000); return () => clearInterval(iv) }, [])
+  useEffect(() => {
+    load()
+    const iv = setInterval(load, 60000)
+    return () => clearInterval(iv)
+  }, [load])
 
-  if (loading) return <div className="loading"><div className="spinner" />Loading funding rates...</div>
-
-  const enabled = rates?.arb_enabled ?? false
-  const threshold = rates?.entry_threshold_pct ?? 0.01
-  const rateList = rates?.rates ?? []
-  const openPositions = positions?.positions ?? []
+  if (loading) return <div className="loading"><div className="spinner" />Loading funding data...</div>
 
   return (
     <div>
-      <div className="page-title">Funding Rate Arb</div>
-      <div className="page-sub">Market-neutral. Long spot + short perp = collect funding payments with zero price exposure.</div>
+      <div className="page-title">Funding Rate Arbitrage</div>
+      <div className="page-sub">
+        Market-neutral strategy — long spot + short perpetual. Collects funding payments when rates are positive.
+      </div>
 
-      {error && <div className="card" style={{ borderColor: 'rgba(239,68,68,0.3)', background: 'rgba(239,68,68,0.05)', marginBottom: 16 }}><span style={{ color: '#f87171' }}>{error}</span></div>}
-
-      {!enabled && (
-        <div className="card" style={{ borderColor: 'var(--amber-dim)', background: 'rgba(245,166,35,0.05)', marginBottom: 16, fontSize: 13, color: 'var(--text-2)' }}>
-          Funding arb is disabled. Go to <strong>Settings → Strategy activation</strong> to enable it. Requires a funded Bybit account.
-        </div>
-      )}
-
+      {/* Venue indicator */}
       <div className="card" style={{ marginBottom: 16 }}>
-        <div className="card-title">Live funding rates</div>
-        <div style={{ fontSize: 12, color: 'var(--text-3)', marginBottom: 16 }}>Entry threshold: {threshold}%/8h ({(threshold * 3 * 365).toFixed(1)}% ann.)</div>
-        {rateList.length === 0
-          ? <div style={{ color: 'var(--text-3)', fontSize: 13 }}>No rate data. Enable and connect Bybit.</div>
-          : rateList.map(r => (
-            <div key={r.pair} style={{ marginBottom: 16 }}>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, marginBottom: 6 }}>
-                <span style={{ fontWeight: 600 }}>{r.pair}/USDT</span>
-                <span className="mono" style={{ fontSize: 20, fontWeight: 700, color: r.above_entry ? 'var(--green)' : 'var(--text)' }}>
-                  {r.rate_8h_pct >= 0 ? '+' : ''}{r.rate_8h_pct.toFixed(4)}%<span style={{ fontSize: 12, fontWeight: 400, color: 'var(--text-3)' }}>/8h</span>
-                </span>
-                <span style={{ fontSize: 13, color: 'var(--text-3)' }}>{r.annualized_pct.toFixed(1)}% ann.</span>
-                {r.above_entry && <span className="tag tag-green">Above threshold</span>}
-              </div>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <RateBar rate={r.rate_8h_pct} threshold={threshold} />
-              </div>
+        <div className="card-title">Active venue</div>
+
+        {rates && !rates.error ? (
+          <>
+            <div style={{ marginBottom: 14 }}>
+              <VenueBadge
+                label={rates.venue_label ?? rates.arb_exchange ?? 'Unknown'}
+                color={rates.venue_color ?? 'amber'}
+                legalUs={rates.venue_legal_us}
+              />
             </div>
-          ))
-        }
+
+            {/* CFM recommendation */}
+            {rates.venue_legal_us !== true && (
+              <div style={{
+                padding: '10px 14px',
+                background: 'rgba(16,185,129,0.05)',
+                border: '1px solid rgba(16,185,129,0.2)',
+                borderRadius: 6,
+                fontSize: 13,
+                color: 'var(--text-2)',
+                marginBottom: 10,
+              }}>
+                <span style={{ color: 'var(--green)', fontWeight: 600 }}>Coinbase CFM</span>
+                {' '}is the recommended venue for US residents — CFTC-regulated, no geo-block.
+                Set <code style={{ fontSize: 11, background: 'var(--bg-3)', padding: '1px 5px', borderRadius: 3 }}>FUNDING_ARB_EXCHANGE=coinbase_cfm</code> in
+                Settings → Advanced to switch.
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', fontSize: 13, color: 'var(--text-3)', marginTop: 8 }}>
+              <span>Strategy: <strong style={{ color: 'var(--text-1)' }}>{rates.arb_enabled ? 'Enabled' : 'Disabled'}</strong></span>
+              <span>Entry threshold: <strong style={{ color: 'var(--text-1)' }}>{rates.entry_threshold_pct}%/8h</strong></span>
+              <span>Exit threshold: <strong style={{ color: 'var(--text-1)' }}>{rates.exit_threshold_pct}%/8h</strong></span>
+              <span>Entry annualised: <strong style={{ color: 'var(--text-1)' }}>
+                {(rates.entry_threshold_pct * 3 * 365).toFixed(1)}%/yr
+              </strong></span>
+            </div>
+
+            {!rates.arb_enabled && (
+              <div style={{ marginTop: 12, fontSize: 13, color: 'var(--amber)' }}>
+                Strategy is disabled. Enable via Settings → Advanced → FUNDING_ARB_ENABLED.
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
+            {error || 'Unable to reach MCP server.'}
+          </div>
+        )}
       </div>
 
+      {/* Funding rates */}
       <div className="card" style={{ marginBottom: 16 }}>
-        <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
-          <div className="card-title" style={{ marginBottom: 0, flex: 1 }}>Open positions</div>
-          {(positions?.total_funding_collected_usd ?? 0) > 0 && <span style={{ fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>+${positions.total_funding_collected_usd.toFixed(4)} collected</span>}
-        </div>
-        {openPositions.length === 0
-          ? <div style={{ color: 'var(--text-3)', fontSize: 13 }}>{enabled ? 'Waiting for rate above threshold.' : 'Enable funding arb to start.'}</div>
-          : <table className="table"><thead><tr><th>Pair</th><th>Entry</th><th>Qty</th><th>Funding collected</th><th>Opened</th></tr></thead>
-            <tbody>{openPositions.map(p => (
-              <tr key={p.id}>
-                <td className="mono">{p.pair}/USDT</td>
-                <td className="mono">${p.entry_price?.toLocaleString()}</td>
-                <td className="mono">{p.quantity?.toFixed(6)}</td>
-                <td className="mono" style={{ color: 'var(--green)' }}>+${p.funding_collected?.toFixed(4)}</td>
-                <td style={{ fontSize: 12, color: 'var(--text-3)' }}>{p.opened_at?.slice(0, 10)}</td>
+        <div className="card-title">Current funding rates</div>
+        {rates?.rates?.length > 0 ? (
+          <table className="table" style={{ width: '100%' }}>
+            <thead>
+              <tr>
+                <th>Pair</th>
+                <th>Rate / 8h</th>
+                <th>Annualised</th>
+                <th>Status</th>
               </tr>
-            ))}</tbody></table>
-        }
+            </thead>
+            <tbody>
+              {rates.rates.map(r => (
+                <RateRow key={r.pair} r={r} threshold={rates.entry_threshold_pct} />
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
+            {rates?.error
+              ? `Error fetching rates: ${rates.error}`
+              : 'No rate data available. Rates fetch every 60 seconds.'}
+          </div>
+        )}
+
+        {/* Bear market context note */}
+        <div style={{
+          marginTop: 14, padding: '10px 14px',
+          background: 'var(--bg-2)', borderRadius: 6,
+          fontSize: 12, color: 'var(--text-3)', lineHeight: 1.6,
+        }}>
+          In bear markets, funding rates compress to 2–5% annualised. Current Morpho USDC yield (8.28%) 
+          likely outperforms. Infrastructure is ready — deploy capital when BTC rates sustain above 
+          {' '}{rates?.entry_threshold_pct ?? 0.01}%/8h ({((rates?.entry_threshold_pct ?? 0.01) * 3 * 365).toFixed(0)}%/yr).
+        </div>
       </div>
 
-      <div className="card" style={{ fontSize: 13, color: 'var(--text-2)' }}>
-        <div className="card-title" style={{ marginBottom: 8 }}>How it works</div>
-        <p style={{ margin: '0 0 10px' }}>Perpetual futures pay funding every 8 hours to balance longs and shorts. When longs outnumber shorts, longs pay shorts. Holding long spot alongside short perp cancels price exposure — only funding income remains.</p>
-        <p style={{ margin: 0 }}>Engine monitors BTC and ETH. When 8h rate exceeds <strong style={{ color: 'var(--text)' }}>{threshold}%</strong> (≈{(threshold * 3 * 365).toFixed(0)}% ann.) it opens a pair trade automatically and closes when rates drop below exit threshold. Risk: negative funding rates. Bot closes before that happens. Recommended test allocation: <strong style={{ color: 'var(--text)' }}>$1,000</strong>.</p>
+      {/* Open positions */}
+      <div className="card">
+        <div className="card-title">
+          Open arb positions
+          {positions?.count > 0 && (
+            <span className="badge" style={{ marginLeft: 8 }}>{positions.count}</span>
+          )}
+        </div>
+
+        {positions?.positions?.length > 0 ? (
+          <>
+            <table className="table" style={{ width: '100%', marginBottom: 12 }}>
+              <thead>
+                <tr>
+                  <th>Pair</th>
+                  <th>Entry price</th>
+                  <th>Quantity</th>
+                  <th>Funding collected</th>
+                  <th>Opened</th>
+                </tr>
+              </thead>
+              <tbody>
+                {positions.positions.map(p => (
+                  <PositionRow key={p.id} p={p} />
+                ))}
+              </tbody>
+            </table>
+            <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
+              Total funding collected:{' '}
+              <strong style={{ color: 'var(--green)' }}>
+                ${positions.total_funding_collected_usd?.toFixed(4)}
+              </strong>
+            </div>
+          </>
+        ) : (
+          <div style={{ color: 'var(--text-3)', fontSize: 13 }}>
+            No open positions. The engine opens a pair trade when the funding rate exceeds the entry threshold.
+          </div>
+        )}
       </div>
     </div>
   )

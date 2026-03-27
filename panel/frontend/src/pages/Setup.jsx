@@ -7,10 +7,12 @@ export default function Setup({ onComplete }) {
   const [confirm, setConfirm] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [tosAccepted, setTosAccepted] = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
     setError('')
+    if (!tosAccepted) { setError('You must accept the Terms of Service to continue'); return }
     if (password.length < 8) { setError('Password must be at least 8 characters'); return }
     if (password !== confirm) { setError('Passwords do not match'); return }
     setLoading(true)
@@ -67,7 +69,26 @@ export default function Setup({ onComplete }) {
           <div className="field-desc">This password is stored in your Railway environment. You can reset it there if needed.</div>
         </div>
 
-        <button type="submit" className="btn btn-amber" style={{ width: '100%' }} disabled={loading}>
+        <div className="field" style={{ marginBottom: 16 }}>
+          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, cursor: 'pointer' }}>
+            <input
+              type="checkbox"
+              checked={tosAccepted}
+              onChange={e => setTosAccepted(e.target.checked)}
+              style={{ marginTop: 3, accentColor: 'var(--amber)', flexShrink: 0 }}
+            />
+            <span style={{ fontSize: 13, color: 'var(--text-2)', lineHeight: 1.5 }}>
+              I confirm that I have the legal right to use each exchange I connect in my jurisdiction,
+              and I have read and agree to the{' '}
+              <a href="/terms.html" target="_blank" rel="noopener noreferrer"
+                 style={{ color: 'var(--amber)', textDecoration: 'underline' }}>
+                Terms of Service
+              </a>.
+            </span>
+          </label>
+        </div>
+
+        <button type="submit" className="btn btn-amber" style={{ width: '100%' }} disabled={loading || !tosAccepted}>
           {loading ? 'Verifying...' : 'Set up panel'}
         </button>
       </form>
