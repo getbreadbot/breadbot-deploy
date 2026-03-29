@@ -680,6 +680,91 @@ def get_strategy_performance() -> dict:
     }
 
 
+
+# ---------------------------------------------------------------------------
+# Backtesting tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_backtest_results() -> dict:
+    """Return the most recent backtest summary stored in data/backtest_last.json.
+
+    The summary includes win rate, total PnL, avg win/loss, outcome breakdown,
+    and the parameters used. The full trade-level list is excluded to keep
+    the response compact. Run trigger_backtest() to refresh the data.
+    """
+    import json as _json
+    result_path = Path(__file__).parent / "data" / "backtest_last.json"
+    if not result_path.exists():
+        return {"error": "No backtest results found. Run trigger_backtest() first."}
+    try:
+        raw = _json.loads(result_path.read_text())
+    except Exception as e:
+        return {"error": f"Could not parse results file: {e}"}
+    # Return summary fields only -- omit the full trades list (can be 1000+ rows)
+    summary_keys = [
+        "mode", "min_score", "days", "stop_loss_pct", "tp1_pct", "tp2_pct",
+        "portfolio_usd", "total_alerts", "total_trades", "wins", "losses",
+        "no_data", "win_rate_pct", "total_pnl_usd", "avg_win_usd",
+        "avg_loss_usd", "outcome_counts", "completed_at",
+    ]
+    return {k: raw[k] for k in summary_keys if k in raw}
+
+
+@mcp.tool()
+def trigger_backtest(
+    mode:      str = "all",
+    min_score: int = 75,
+    days:      int = 30,
+) -> dict:
+    """Launch a backtest run as a background process.
+
+    Returns immediately with the process PID. Results are written to
+    data/backtest_last.json when the run completes. Poll get_backtest_results()
+    to check when data is available (the completed_at field will be updated).
+
+    mode      : 'actual' (only buy decisions) or 'all' (every alert)
+    min_score : minimum security score to include (default 75)
+    days      : look-back window in days (default 30)
+    """
+    import subprocess as _subprocess
+    import shlex as _shlex
+
+    script = Path(__file__).parent / "backtest.py"
+    output = Path(__file__).parent / "data" / "backtest_last.json"
+    log    = Path("/tmp/backtest_mcp.log")
+
+    cmd = (
+        f"python3 -u {script} "
+        f"--mode {_shlex.quote(mode)} "
+        f"--min-score {int(min_score)} "
+        f"--days {int(days)} "
+        f"--json "
+        f"> {output} 2>{log} "
+        f"& echo $!"
+    )
+    try:
+        result = _subprocess.run(
+            cmd, shell=True, capture_output=True, text=True, timeout=5
+        )
+        pid = result.stdout.strip()
+        return {
+            "status":      "launched",
+            "pid":         pid,
+            "mode":        mode,
+            "min_score":   min_score,
+            "days":        days,
+            "output_path": str(output),
+            "log_path":    str(log),
+            "note": (
+                "Poll get_backtest_results() in a few minutes -- "
+                "a full all-alerts run takes ~45 min due to GeckoTerminal rate limits."
+            ),
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
