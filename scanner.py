@@ -26,6 +26,7 @@ from pathlib import Path
 
 import httpx
 from dotenv import load_dotenv
+from broadcaster import broadcast_alert
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -40,6 +41,7 @@ from config import (
 from auto_executor import AutoExecutor
 from yield_rebalancer import handle_rebalance_command, handle_rebalance_callback
 from pendle_connector import handle_pendle_command
+from robinhood_connector import get_account as rh_get_account, get_crypto_positions as rh_get_positions
 from grid_engine import GridEngine, handle_grid_command
 from funding_arb_engine import FundingArbEngine, handle_funding_command
 from alt_data_signals import (
@@ -488,8 +490,14 @@ async def _fetch_pair_detail(
         "liquidity":   liquidity,
         "volume_24h":  volume_24,
         "mcap":        mcap,
-        "pair_addr":   best.get("pairAddress", ""),
-        "age_hours":   round(age_h, 1),
+        pair_addr:       best.get(pairAddress, ),
+        age_hours:       round(age_h, 1),
+        price_change_m5: float((best.get(priceChange) or {}).get(m5) or 0),
+        price_change_h1: float((best.get(priceChange) or {}).get(h1) or 0),
+        txns_m5_buys:    int((best.get(txns) or {}).get(m5, {}).get(buys) or 0),
+        txns_m5_sells:   int((best.get(txns) or {}).get(m5, {}).get(sells) or 0),
+        txns_h1_buys:    int((best.get(txns) or {}).get(h1, {}).get(buys) or 0),
+        txns_h1_sells:   int((best.get(txns) or {}).get(h1, {}).get(sells) or 0),
     }
 
 
@@ -568,6 +576,54 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
         elif vl_ratio < 1:
             score = max(0, score - 3)
             flags.append(f"Low Vol/Liq {vl_ratio:.2f}x")
+
+    # Momentum scoring — price velocity and buy pressure
+    pc_m5    = pair.get('price_change_m5', 0.0)
+    pc_h1    = pair.get('price_change_h1', 0.0)
+    m5_buys  = pair.get('txns_m5_buys',  0)
+    m5_sells = pair.get('txns_m5_sells', 0)
+    h1_buys  = pair.get('txns_h1_buys',  0)
+
+    if pc_m5 >= 20:
+        score = min(100, score + 6); flags.append(f'+6 Price +{pc_m5:.0f}% (5m)')
+    elif pc_m5 >= 10:
+        score = min(100, score + 4); flags.append(f'+4 Price +{pc_m5:.0f}% (5m)')
+    elif pc_m5 >= 5:
+        score = min(100, score + 2); flags.append(f'+2 Price +{pc_m5:.0f}% (5m)')
+    elif pc_m5 <= -15:
+        score = max(0, score - 5); flags.append(f'Price {pc_m5:.0f}% (5m)')
+    elif pc_m5 <= -5:
+        score = max(0, score - 2); flags.append(f'Price {pc_m5:.0f}% (5m)')
+
+    if pc_h1 >= 50:
+        score = min(100, score + 5); flags.append(f'+5 Price +{pc_h1:.0f}% (1h)')
+    elif pc_h1 >= 20:
+        score = min(100, score + 3); flags.append(f'+3 Price +{pc_h1:.0f}% (1h)')
+    elif pc_h1 >= 10:
+        score = min(100, score + 1); flags.append(f'+1 Price +{pc_h1:.0f}% (1h)')
+    elif pc_h1 <= -30:
+        score = max(0, score - 6); flags.append(f'Price {pc_h1:.0f}% (1h)')
+    elif pc_h1 <= -10:
+        score = max(0, score - 3); flags.append(f'Price {pc_h1:.0f}% (1h)')
+
+    m5_total = m5_buys + m5_sells
+    if m5_total >= 5:
+        m5_ratio = m5_buys / m5_total
+        if m5_ratio >= 0.80:
+            score = min(100, score + 5); flags.append(f'+5 Buy pressure {m5_ratio*100:.0f}% (5m)')
+        elif m5_ratio >= 0.65:
+            score = min(100, score + 3); flags.append(f'+3 Buy pressure {m5_ratio*100:.0f}% (5m)')
+        elif m5_ratio >= 0.55:
+            score = min(100, score + 1); flags.append(f'+1 Buy pressure {m5_ratio*100:.0f}% (5m)')
+        elif m5_ratio <= 0.30:
+            score = max(0, score - 4); flags.append(f'Sell pressure {(1-m5_ratio)*100:.0f}% (5m)')
+
+    if h1_buys >= 200:
+        score = min(100, score + 4); flags.append(f'+4 Buy velocity {h1_buys} txns (1h)')
+    elif h1_buys >= 100:
+        score = min(100, score + 2); flags.append(f'+2 Buy velocity {h1_buys} txns (1h)')
+    elif h1_buys >= 50:
+        score = min(100, score + 1); flags.append(f'+1 Buy velocity {h1_buys} txns (1h)')
 
     # Social signals — Arkham + alpha channel boost
     social_boost, social_flags = await get_social_score_boost(token_addr, chain, client)
@@ -652,6 +708,10 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
         text, position = build_approval_message(pair, score, flags, result)
         keyboard       = build_buy_keyboard(alert_id, position)
         await send_message(client, text, reply_markup=keyboard)
+
+    # Alpha broadcast — fire-and-forget to all registered buyers
+    # Runs only when an alert is not blocked (blocked paths return early above).
+    asyncio.create_task(broadcast_alert(client, pair, score, flags))
 
 
 # ── Telegram callback poller ──────────────────────────────────────────────────
@@ -755,6 +815,8 @@ async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
     elif cmd == "channels":
         parts = (cmd + (" " + args if args else "")).split()
         await handle_channels_command(parts, send_message)
+    elif cmd == "robinhood":
+        await handle_robinhood_command(client)
     elif cmd == "status":
         await handle_status_command(client)
 
