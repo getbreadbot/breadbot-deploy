@@ -18,6 +18,7 @@ const NAV_STRATEGIES = [
 
 const NAV_SYSTEM = [
   { to: '/performance', label: 'Performance', icon: '◈' },
+  { to: '/backtest',    label: 'Backtest',    icon: '◑' },
   { to: '/settings',   label: 'Settings',    icon: '⚙' },
 ]
 

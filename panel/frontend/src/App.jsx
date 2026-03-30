@@ -13,6 +13,7 @@ import Grid        from './pages/Grid.jsx'
 import FundingArb  from './pages/FundingArb.jsx'
 import Performance from './pages/Performance.jsx'
 import SignalChannels from './pages/SignalChannels.jsx'
+import Backtest      from './pages/Backtest.jsx'
 import { get } from './lib/api.js'
 
 export default function App() {

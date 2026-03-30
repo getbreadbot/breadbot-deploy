@@ -263,3 +263,25 @@ async def remove_channel(channel_id: str, auth=Depends(verify_session)):
         "action": "remove",
         "channel_id": channel_id,
     })
+
+
+# ── Backtesting ───────────────────────────────────────────────────────────────
+
+class TriggerBacktestPayload(BaseModel):
+    mode:      str = "all"
+    min_score: int = 75
+    days:      int = 30
+
+
+@router.get("/backtest/results")
+async def backtest_results(auth=Depends(verify_session)):
+    return await call_tool("get_backtest_results")
+
+
+@router.post("/backtest/trigger")
+async def backtest_trigger(payload: TriggerBacktestPayload, auth=Depends(verify_session)):
+    return await call_tool("trigger_backtest", {
+        "mode":      payload.mode,
+        "min_score": payload.min_score,
+        "days":      payload.days,
+    })
