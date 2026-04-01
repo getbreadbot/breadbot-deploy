@@ -677,7 +677,8 @@ async def api_balances():
     if now - _balance_cache["ts"] < 30 and _balance_cache["data"]:
         return JSONResponse(_balance_cache["data"])
 
-    base_data = await _fetch_base_balances()
+    import asyncio
+    base_data = await asyncio.to_thread(_fetch_base_balances)
     sol_data = await _fetch_solana_balances()
 
     total_usdc = base_data.get("usdc", 0) + sol_data.get("usdc", 0)
@@ -691,7 +692,7 @@ async def api_balances():
     return JSONResponse(result)
 
 
-async def _fetch_base_balances():
+def _fetch_base_balances():
     result = {"eth": 0, "usdc": 0, "flash_loan_contract_eth": 0}
     try:
         from web3 import Web3
