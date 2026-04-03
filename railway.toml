@@ -157,3 +157,22 @@ name = "SMART_MONEY_SIGNAL_BOOST"
 description = "Score boost when a labeled smart-money wallet has bought in via Arkham."
 required = false
 defaultValue = "8"
+
+# ── Portfolio size ─────────────────────────────────────────────────────────────
+[[deploy.envVars]]
+name = "TOTAL_PORTFOLIO_USD"
+description = "Your total account size in USD. Used for position sizing — if your account is $500 not $5000, set this correctly or every trade will be 10x oversized."
+required = true
+defaultValue = "5000"
+
+[[deploy.envVars]]
+name = "MAX_OPEN_POSITIONS"
+description = "Maximum number of meme coin positions open at once. Default 5."
+required = false
+defaultValue = "5"
+
+[[deploy.envVars]]
+name = "EXECUTION_MODE"
+description = "Set to 'auto' to enable automatic trade execution. Leave as 'manual' (default) to receive alerts only."
+required = false
+defaultValue = "manual"

@@ -52,7 +52,20 @@ log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 AXIOM_ENABLED          = os.getenv("AXIOM_ENABLED", "true").lower() == "true"
-AXIOM_SESSION_COOKIE   = os.getenv("AXIOM_SESSION_COOKIE", "").strip()
+# AXIOM_SESSION_COOKIE is re-read from .env on every poll so it can be updated
+# without restarting the bot. The auth-access-token expires every ~16 min.
+# To refresh: extract auth-access-token from Chrome DevTools → Application →
+# Cookies → axiom.trade, update AXIOM_SESSION_COOKIE in .env (no restart needed).
+def _get_session_cookie() -> str:
+    """Re-read AXIOM_SESSION_COOKIE from .env at call time for hot-reload support."""
+    from dotenv import dotenv_values
+    env_path = Path(__file__).parent / ".env"
+    if env_path.exists():
+        vals = dotenv_values(str(env_path))
+        return vals.get("AXIOM_SESSION_COOKIE", "").strip()
+    return os.getenv("AXIOM_SESSION_COOKIE", "").strip()
+
+AXIOM_SESSION_COOKIE   = os.getenv("AXIOM_SESSION_COOKIE", "").strip()  # initial value
 AXIOM_BOOST_ENABLED    = os.getenv("AXIOM_BOOST_ENABLED", "true").lower() == "true"
 AXIOM_BOOST_SCORE      = int(os.getenv("AXIOM_BOOST_SCORE", "4"))
 AXIOM_STREAM_SCORE     = int(os.getenv("AXIOM_STREAM_SCORE", "6"))
@@ -124,9 +137,9 @@ def get_boost_score(token_addr: str) -> tuple[int, list[str]]:
 # ── Axiom Stream Feed ─────────────────────────────────────────────────────────
 
 def _axiom_headers() -> dict:
-    """Build headers for Axiom API calls using the session cookie."""
+    """Build headers for Axiom API calls using the session cookie (hot-reloaded)."""
     return {
-        "Cookie":     AXIOM_SESSION_COOKIE,
+        "Cookie":     _get_session_cookie(),
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
         "Accept":     "application/json",
         "Referer":    "https://axiom.trade/",
@@ -139,16 +152,25 @@ async def _poll_axiom_stream(client: httpx.AsyncClient) -> None:
     Updates _axiom_stream_cache and _new_token_queue.
     No-ops gracefully if cookie is not set or request fails.
     """
-    if not AXIOM_SESSION_COOKIE:
+    cookie = _get_session_cookie()
+    if not cookie:
         return
 
     ts = int(time.time() * 1000)
     url = f"{AXIOM_API_BASE}/pump-live-stream-alerts?v={ts}"
 
     try:
-        r = await client.get(url, headers=_axiom_headers(), timeout=15)
+        r = await client.get(url, headers=_axiom_headers(), timeout=15)  # cookie hot-reloaded
         if r.status_code != 200:
-            log.warning("axiom_signals: stream HTTP %d (cookie may be stale)", r.status_code)
+            if r.status_code in (401, 403):
+                log.warning(
+                    "axiom_signals: stream auth expired (HTTP %d). "
+                    "Extract fresh auth-access-token from Chrome DevTools → Application → "
+                    "Cookies → axiom.trade and update AXIOM_SESSION_COOKIE in .env. "
+                    "No bot restart needed.", r.status_code
+                )
+            else:
+                log.warning("axiom_signals: stream HTTP %d", r.status_code)
             return
 
         alerts = r.json()
@@ -286,7 +308,7 @@ async def axiom_poll_loop() -> None:
             try:
                 if AXIOM_BOOST_ENABLED:
                     await _poll_dexscreener_boosts(client)
-                if AXIOM_SESSION_COOKIE:
+                if _get_session_cookie():
                     await _poll_axiom_stream(client)
             except Exception as exc:
                 log.error("axiom_signals: poll loop error: %s", exc)
