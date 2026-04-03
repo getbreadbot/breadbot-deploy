@@ -176,3 +176,31 @@ name = "EXECUTION_MODE"
 description = "Set to 'auto' to enable automatic trade execution. Leave as 'manual' (default) to receive alerts only."
 required = false
 defaultValue = "manual"
+
+# ── Optional: Gemini exchange ──────────────────────────────────────────────────
+[[deploy.envVars]]
+name = "GEMINI_API_KEY"
+description = "Gemini exchange API key — Fund Management + Trading permissions only. No withdrawal."
+required = false
+
+[[deploy.envVars]]
+name = "GEMINI_SECRET_KEY"
+description = "Gemini exchange API secret."
+required = false
+
+# ── Optional: Robinhood crypto ────────────────────────────────────────────────
+[[deploy.envVars]]
+name = "ROBINHOOD_USERNAME"
+description = "Robinhood account email. Required only if using Robinhood as execution venue."
+required = false
+
+[[deploy.envVars]]
+name = "ROBINHOOD_PASSWORD"
+description = "Robinhood account password."
+required = false
+
+# ── Optional: Axiom signal layer ──────────────────────────────────────────────
+[[deploy.envVars]]
+name = "AXIOM_SESSION_COOKIE"
+description = "Axiom auth cookie (auth-access-token + auth-refresh-token). Extract from Chrome DevTools → Application → Cookies → axiom.trade. Enables Axiom pump stream scoring (+6 per hit). Leave blank to use DEXScreener boosts only."
+required = false
