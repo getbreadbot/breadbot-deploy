@@ -35,6 +35,8 @@ New .env vars:
 """
 
 import asyncio
+import base64
+import json
 import logging
 import os
 import time
@@ -66,6 +68,68 @@ def _get_session_cookie() -> str:
     return os.getenv("AXIOM_SESSION_COOKIE", "").strip()
 
 AXIOM_SESSION_COOKIE   = os.getenv("AXIOM_SESSION_COOKIE", "").strip()  # initial value
+
+def _parse_jwt_exp(token: str) -> int:
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return 0
+        payload = parts[1] + "=" * (-len(parts[1]) % 4)
+        return int(json.loads(base64.urlsafe_b64decode(payload)).get("exp", 0))
+    except Exception:
+        return 0
+
+def _extract_access_token(cookie_str: str) -> str:
+    for part in cookie_str.split(";"):
+        part = part.strip()
+        if part.startswith("auth-access-token="):
+            return part.split("=", 1)[1].strip()
+    return ""
+
+_axiom_auth_alert_sent: float = 0.0
+_AXIOM_AUTH_ALERT_COOLDOWN = 1800
+
+# ── JWT expiry helpers ────────────────────────────────────────────────────────
+
+def _parse_jwt_exp(token: str) -> int:
+    """Return the exp (Unix timestamp) from a JWT, or 0 on failure."""
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return 0
+        payload = parts[1]
+        # Pad to multiple of 4 for base64 decoding
+        payload += "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload))
+        return int(data.get("exp", 0))
+    except Exception:
+        return 0
+
+
+def _extract_access_token(cookie_str: str) -> str:
+    """Extract the auth-access-token value from the full cookie string."""
+    for part in cookie_str.split(";"):
+        part = part.strip()
+        if part.startswith("auth-access-token="):
+            return part.split("=", 1)[1].strip()
+    return ""
+
+
+def _cookie_is_expired(cookie_str: str) -> bool:
+    """Return True if the auth-access-token in the cookie string is expired."""
+    if not cookie_str:
+        return False
+    token = _extract_access_token(cookie_str)
+    if not token:
+        return False
+    exp = _parse_jwt_exp(token)
+    if exp == 0:
+        return False
+    return time.time() > exp
+
+
+_axiom_auth_alert_sent = 0  # Unix timestamp of last auth-expired Telegram alert
+_AXIOM_AUTH_ALERT_COOLDOWN = 1800  # send at most every 30 min
 AXIOM_BOOST_ENABLED    = os.getenv("AXIOM_BOOST_ENABLED", "true").lower() == "true"
 AXIOM_BOOST_SCORE      = int(os.getenv("AXIOM_BOOST_SCORE", "4"))
 AXIOM_STREAM_SCORE     = int(os.getenv("AXIOM_STREAM_SCORE", "6"))
@@ -136,6 +200,76 @@ def get_boost_score(token_addr: str) -> tuple[int, list[str]]:
 
 # ── Axiom Stream Feed ─────────────────────────────────────────────────────────
 
+
+
+
+async def _refresh_axiom_token(client: httpx.AsyncClient) -> bool:
+    """
+    Use the auth-refresh-token to obtain a new auth-access-token from Axiom.
+    Updates AXIOM_SESSION_COOKIE in .env in-place so hot-reload picks it up.
+    Returns True if refresh succeeded.
+    """
+    cookie = _get_session_cookie()
+    refresh_token = ""
+    for part in cookie.split(";"):
+        part = part.strip()
+        if part.startswith("auth-refresh-token="):
+            refresh_token = part.split("=", 1)[1].strip()
+            break
+    if not refresh_token:
+        log.warning("axiom_signals: no auth-refresh-token in cookie, cannot auto-refresh")
+        return False
+    try:
+        r = await client.post(
+            f"{AXIOM_API_BASE}/auth/refresh-token",
+            headers={
+                "Cookie": f"auth-refresh-token={refresh_token}",
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+                "Content-Type": "application/json",
+                "Referer": "https://axiom.trade/",
+            },
+            timeout=10,
+        )
+        if r.status_code != 200:
+            log.warning("axiom_signals: refresh endpoint returned HTTP %d", r.status_code)
+            return False
+        # Parse new access token from Set-Cookie response header
+        new_access = ""
+        for hdr_val in r.headers.get_list("set-cookie") if hasattr(r.headers, "get_list") else [r.headers.get("set-cookie", "")]:
+            for part in hdr_val.split(";"):
+                part = part.strip()
+                if part.startswith("auth-access-token="):
+                    new_access = part.split("=", 1)[1].strip()
+                    break
+            if new_access:
+                break
+        # Fallback: try parsing from JSON body
+        if not new_access:
+            try:
+                body = r.json()
+                new_access = body.get("accessToken", "") or body.get("access_token", "")
+            except Exception:
+                pass
+        if not new_access:
+            log.warning("axiom_signals: refresh succeeded but could not parse new access token")
+            return False
+        # Update the cookie string in .env in-place
+        env_path = Path(__file__).parent / ".env"
+        if env_path.exists():
+            env_src = env_path.read_text()
+            old_at = _extract_access_token(cookie)
+            if old_at:
+                new_cookie = cookie.replace(f"auth-access-token={old_at}", f"auth-access-token={new_access}")
+            else:
+                new_cookie = f"auth-access-token={new_access}; {cookie}"
+            env_src = re.sub(r"^AXIOM_SESSION_COOKIE=.*$", f"AXIOM_SESSION_COOKIE={new_cookie}", env_src, flags=re.MULTILINE)
+            env_path.write_text(env_src)
+        log.info("axiom_signals: auth-access-token refreshed successfully")
+        return True
+    except Exception as exc:
+        log.warning("axiom_signals: token refresh failed: %s", exc)
+        return False
+
 def _axiom_headers() -> dict:
     """Build headers for Axiom API calls using the session cookie (hot-reloaded)."""
     return {
@@ -163,12 +297,20 @@ async def _poll_axiom_stream(client: httpx.AsyncClient) -> None:
         r = await client.get(url, headers=_axiom_headers(), timeout=15)  # cookie hot-reloaded
         if r.status_code != 200:
             if r.status_code in (401, 403):
-                log.warning(
-                    "axiom_signals: stream auth expired (HTTP %d). "
-                    "Extract fresh auth-access-token from Chrome DevTools → Application → "
-                    "Cookies → axiom.trade and update AXIOM_SESSION_COOKIE in .env. "
-                    "No bot restart needed.", r.status_code
-                )
+                log.warning("axiom_signals: stream auth expired (HTTP %d) -- attempting auto-refresh", r.status_code)
+                refreshed = await _refresh_axiom_token(client)
+                if refreshed:
+                    # Retry once with new token
+                    r2 = await client.get(url, headers=_axiom_headers(), timeout=15)
+                    if r2.status_code == 200:
+                        alerts = r2.json()
+                        # fall through to process alerts below
+                    else:
+                        await _send_axiom_auth_alert(client)
+                        return
+                else:
+                    await _send_axiom_auth_alert(client)
+                    return
             else:
                 log.warning("axiom_signals: stream HTTP %d", r.status_code)
             return
