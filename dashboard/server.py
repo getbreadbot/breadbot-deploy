@@ -34,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 try:
     from alt_data_signals import get_cached_signals as _get_signals
-except ImportError:
+except (ImportError, Exception):
     _get_signals = None
 
 # ── Wallet addresses ─────────────────────────────────────────────────────────
