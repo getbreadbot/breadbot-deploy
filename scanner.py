@@ -595,10 +595,15 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     elif pc_m5 <= -5:
         score = max(0, score - 2); flags.append(f'Price {pc_m5:.0f}% (5m)')
 
-    if pc_h1 >= 50:
-        score = min(100, score + 5); flags.append(f'+5 Price +{pc_h1:.0f}% (1h)')
-    elif pc_h1 >= 20:
+    # h1 velocity: extreme pumps are a dump-risk signal — penalise rather than reward
+    if pc_h1 >= 200:
+        score = max(0, score - 10); flags.append(f'Already pumped +{pc_h1:.0f}% (1h)')
+    elif pc_h1 >= 100:
+        score = max(0, score - 5);  flags.append(f'Already pumped +{pc_h1:.0f}% (1h)')
+    elif pc_h1 >= 50:
         score = min(100, score + 3); flags.append(f'+3 Price +{pc_h1:.0f}% (1h)')
+    elif pc_h1 >= 20:
+        score = min(100, score + 2); flags.append(f'+2 Price +{pc_h1:.0f}% (1h)')
     elif pc_h1 >= 10:
         score = min(100, score + 1); flags.append(f'+1 Price +{pc_h1:.0f}% (1h)')
     elif pc_h1 <= -30:

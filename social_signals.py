@@ -145,6 +145,12 @@ ALPHA_SIGNAL_BOOST     = int(os.getenv("ALPHA_SIGNAL_BOOST", "8"))
 SMART_MONEY_BOOST      = int(os.getenv("SMART_MONEY_SIGNAL_BOOST", "8"))
 TELEGRAM_SESSION       = os.getenv("TELEGRAM_SESSION_STRING", "").strip()
 
+# Trusted channels: single mention from these channels earns ALPHA_TRUSTED_BOOST
+# without requiring multi-channel confirmation. Comma-separated channel IDs.
+_TRUSTED_RAW           = os.getenv("ALPHA_TRUSTED_CHANNEL_IDS", "").strip()
+ALPHA_TRUSTED_IDS      = {c.strip() for c in _TRUSTED_RAW.split(",") if c.strip()}
+ALPHA_TRUSTED_BOOST    = int(os.getenv("ALPHA_TRUSTED_BOOST", "5"))
+
 ARKHAM_BASE            = "https://api.arkhamintelligence.com"
 ALPHA_WINDOW_SECONDS   = 900   # 15-minute window for multi-channel detection
 ALPHA_MIN_CHANNELS     = 2     # minimum channels to trigger boost
@@ -476,10 +482,17 @@ def get_alpha_channel_boost(token_addr: str) -> tuple[int, list[str]]:
     unique_channels = len({ch for ch, _ in hits})
 
     if unique_channels >= ALPHA_MIN_CHANNELS:
-        flags = [
-            f"+{ALPHA_SIGNAL_BOOST} MULTI_CHANNEL_ALPHA ({unique_channels} channels)"
-        ]
+        flags = [f"+{ALPHA_SIGNAL_BOOST} MULTI_CHANNEL_ALPHA ({unique_channels} channels)"]
         return ALPHA_SIGNAL_BOOST, flags
+
+    # Single trusted-channel hit — still earns a smaller boost
+    if ALPHA_TRUSTED_IDS:
+        hit_channels = {ch for ch, _ in hits}
+        trusted_hits = hit_channels & ALPHA_TRUSTED_IDS
+        if trusted_hits:
+            label = ", ".join(trusted_hits)
+            flags = [f"+{ALPHA_TRUSTED_BOOST} Trusted channel signal ({label})"]
+            return ALPHA_TRUSTED_BOOST, flags
 
     return 0, []
 
