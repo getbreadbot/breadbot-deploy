@@ -776,6 +776,10 @@ async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
     """Process a single inline keyboard callback (buy_N or skip_N)."""
     if not cb:
         return
+    # Security: only process callbacks from the authorised chat
+    _cb_chat_id = str((cb.get("message") or {}).get("chat", {}).get("id", ""))
+    if TELEGRAM_CHAT_ID and _cb_chat_id != str(TELEGRAM_CHAT_ID):
+        return
     cb_id    = cb.get("id")
     data     = cb.get("data", "")
     msg      = cb.get("message") or {}
@@ -816,6 +820,10 @@ async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
 async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
     """Route incoming /command text messages from the bot owner."""
     if not msg:
+        return
+    # Security: only process messages from the authorised chat
+    _msg_chat_id = str((msg.get("chat") or {}).get("id", ""))
+    if TELEGRAM_CHAT_ID and _msg_chat_id != str(TELEGRAM_CHAT_ID):
         return
     text = (msg.get("text") or "").strip()
     if not text.startswith("/"):
