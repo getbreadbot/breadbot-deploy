@@ -490,14 +490,14 @@ async def _fetch_pair_detail(
         "liquidity":   liquidity,
         "volume_24h":  volume_24,
         "mcap":        mcap,
-        pair_addr:       best.get(pairAddress, ),
-        age_hours:       round(age_h, 1),
-        price_change_m5: float((best.get(priceChange) or {}).get(m5) or 0),
-        price_change_h1: float((best.get(priceChange) or {}).get(h1) or 0),
-        txns_m5_buys:    int((best.get(txns) or {}).get(m5, {}).get(buys) or 0),
-        txns_m5_sells:   int((best.get(txns) or {}).get(m5, {}).get(sells) or 0),
-        txns_h1_buys:    int((best.get(txns) or {}).get(h1, {}).get(buys) or 0),
-        txns_h1_sells:   int((best.get(txns) or {}).get(h1, {}).get(sells) or 0),
+        "pair_addr":       best.get("pairAddress", ""),
+        "age_hours":       round(age_h, 1),
+        "price_change_m5": float((best.get("priceChange") or {}).get("m5") or 0),
+        "price_change_h1": float((best.get("priceChange") or {}).get("h1") or 0),
+        "txns_m5_buys":    int((best.get("txns") or {}).get("m5", {}).get("buys") or 0),
+        "txns_m5_sells":   int((best.get("txns") or {}).get("m5", {}).get("sells") or 0),
+        "txns_h1_buys":    int((best.get("txns") or {}).get("h1", {}).get("buys") or 0),
+        "txns_h1_sells":   int((best.get("txns") or {}).get("h1", {}).get("sells") or 0),
     }
 
 
