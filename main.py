@@ -255,6 +255,14 @@ async def main() -> None:
     # 3. Register with license server (non-blocking, best-effort)
     await _register_with_license_server()
 
+    # 3b. Gemini connector smoke test (non-blocking)
+    try:
+        from gemini_connector import get_account as _gem_acct
+        _gem_acct()
+        log.info("Gemini connector: auth OK")
+    except Exception as _gem_exc:
+        log.warning("Gemini connector: not available at startup (%s)", _gem_exc)
+
     # 4. Import scanner internals (always runs)
     from scanner import scan_loop, telegram_poller
 
