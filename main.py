@@ -294,6 +294,10 @@ async def main() -> None:
         # Alpha channel monitor (opt-in — needs ALPHA_CHANNEL_IDS + TELEGRAM_SESSION_STRING)
         tasks.append(asyncio.create_task(_run_alpha_monitor(), name="alpha_monitor"))
 
+        # Axiom signal poll loop (DEXScreener boosts + optional Axiom stream)
+        from axiom_signals import axiom_poll_loop
+        tasks.append(asyncio.create_task(axiom_poll_loop(), name="axiom_signals"))
+
         log.info("All %d tasks started", len(tasks))
 
         # Run until the first task raises an unhandled exception.

@@ -50,6 +50,7 @@ from alt_data_signals import (
     handle_feargreed_command,
 )
 from social_signals import get_social_score_boost, handle_alpha_command, handle_channels_command
+from axiom_signals import get_axiom_score_boost, drain_new_token_queue
 
 # Engine singletons — shared across poller and main loop
 _grid_engine    = GridEngine()
@@ -440,6 +441,21 @@ async def fetch_new_pairs(client: httpx.AsyncClient) -> list[dict]:
             pairs.append(detail)
         await asyncio.sleep(0.25)  # gentle rate-limit courtesy
 
+    # Supplement with tokens discovered via Axiom stream (if cookie configured)
+    axiom_tokens = await drain_new_token_queue()
+    for tok in axiom_tokens:
+        addr = tok.get("token_addr", "").strip()
+        if not addr or is_already_alerted(addr):
+            continue
+        _seen_tokens.add(addr)
+        chain = tok.get("chain", "solana")
+        detail = await _fetch_pair_detail(client, chain, addr)
+        if detail:
+            # Inject Axiom metadata as hints so scorer can use them
+            detail["_axiom_queued"] = True
+            pairs.append(detail)
+        await asyncio.sleep(0.25)
+
     return pairs
 
 
@@ -635,6 +651,12 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     if social_boost:
         score = min(100, score + social_boost)
         flags += social_flags
+
+    # Axiom signals — DEXScreener boost + Axiom stream
+    axiom_boost, axiom_flags = await get_axiom_score_boost(token_addr, client)
+    if axiom_boost:
+        score = min(100, score + axiom_boost)
+        flags += axiom_flags
 
     # Hard drop: score below minimum — don't alert at all
     if score < 50:
