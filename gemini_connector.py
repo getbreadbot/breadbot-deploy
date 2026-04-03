@@ -46,7 +46,7 @@ def _check_config() -> None:
 
 
 def _nonce() -> int:
-    return int(time.time() * 1000)
+    return int(time.time())  # seconds — Gemini nonce must match server time unit
 
 
 def _sign_payload(payload: dict) -> tuple[str, str]:
@@ -197,7 +197,7 @@ if __name__ == "__main__":
     else:
         try:
             acct = get_account()
-            print(f"Account OK — {len(acct[nonzero])} non-zero balances")
+            print(f"Account OK — {len(acct["nonzero"])} non-zero balances")
         except Exception as e:
             print(f"get_account failed: {e}")
 
