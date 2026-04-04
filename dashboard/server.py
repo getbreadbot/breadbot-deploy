@@ -61,9 +61,9 @@ def get_db(readonly=True):
     if not DB_PATH.exists():
         return None
     if readonly:
-        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=2)
     else:
-        conn = sqlite3.connect(str(DB_PATH))
+        conn = sqlite3.connect(str(DB_PATH), timeout=2)
     conn.row_factory = sqlite3.Row
     return conn
 
