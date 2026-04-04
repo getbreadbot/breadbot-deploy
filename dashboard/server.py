@@ -70,7 +70,7 @@ def get_db(readonly=True):
 
 def get_db_rw():
     """Read-write connection — used only for action endpoints."""
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=2)
     conn.row_factory = sqlite3.Row
     _ensure_bot_config(conn)
     return conn
@@ -597,20 +597,23 @@ def api_signals():
 
 @app.on_event("startup")
 def create_flash_loans_table():
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS flash_loans (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tx_hash TEXT UNIQUE NOT NULL,
-            status TEXT NOT NULL,
-            profit_usdc REAL DEFAULT 0,
-            gas_cost_eth REAL DEFAULT 0,
-            block_number INTEGER,
-            executed_at TEXT
-        )
-    """)
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(str(DB_PATH), timeout=2)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS flash_loans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tx_hash TEXT UNIQUE NOT NULL,
+                status TEXT NOT NULL,
+                profit_usdc REAL DEFAULT 0,
+                gas_cost_eth REAL DEFAULT 0,
+                block_number INTEGER,
+                executed_at TEXT
+            )
+        """)
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # Non-fatal — DB may be locked at startup
 
 
 # ── TASK 1: GET /api/prices — Live Position Prices via DEXScreener ───────────
@@ -838,7 +841,7 @@ async def _sync_flashloan_txs():
             if frm == fl and to == owner:
                 profit_by_hash[h] += amt
 
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=2)
     conn.row_factory = sqlite3.Row
     for tx in txs[:100]:
         tx_hash = tx.get("hash", "")
