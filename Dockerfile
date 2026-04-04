@@ -27,7 +27,8 @@ WORKDIR /app
 # --- Python dependencies ---
 # Copy requirements first so Docker can cache this layer.
 # Only re-runs when requirements files change, not on every code push.
-COPY requirements.txt requirements_dashboard.txt panel/requirements.txt ./panel_requirements.txt ./
+COPY requirements.txt requirements_dashboard.txt ./
+COPY panel/requirements.txt ./panel_requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir -r panel_requirements.txt
