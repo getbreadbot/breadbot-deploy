@@ -10,7 +10,6 @@ anchorpy==0.21.0               # Anchor framework client
 anchorpy-core==0.2.0
 web3==7.14.1                   # Ethereum/Base RPC + contract interaction
 eth-account==0.13.7            # EVM wallet key management
-driftpy==0.8.89                # Drift Protocol perpetuals
 
 # HTTP / async
 httpx==0.28.1                  # Async HTTP — satisfies fastmcp 3.1.0
@@ -18,7 +17,7 @@ aiohttp==3.12.13               # Async HTTP for concurrent API calls
 aiofiles==25.1.0               # Async file I/O
 aiosqlite==0.21.0              # Async SQLite
 requests==2.32.5               # Sync HTTP
-anyio==4.4.0                   # Async compatibility layer — locked for driftpy
+anyio==4.4.0                   # Async compatibility layer
 
 # MCP / API server
 fastmcp==3.1.0                 # MCP server for Claude tool access
