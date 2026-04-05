@@ -12,7 +12,7 @@ web3==7.14.1                   # Ethereum/Base RPC + contract interaction
 eth-account==0.13.7            # EVM wallet key management
 
 # HTTP / async
-httpx==0.28.1                  # Async HTTP — satisfies fastmcp 3.1.0
+httpx==0.28.1                  # Async HTTP client
 aiohttp==3.12.13               # Async HTTP for concurrent API calls
 aiofiles==25.1.0               # Async file I/O
 aiosqlite==0.21.0              # Async SQLite
@@ -20,8 +20,9 @@ requests==2.32.5               # Sync HTTP
 anyio==4.4.0                   # Async compatibility layer
 
 # MCP / API server
-fastmcp==3.1.0                 # MCP server for Claude tool access
-mcp==1.26.0                    # MCP protocol — locked; 1.27+ needs anyio>=4.5
+websockets==15.0.1             # Pinned: fastmcp>=14, web3<16, solana<=15
+exceptiongroup==1.2.2          # fastmcp 2.3.5 requires >=1.2.2
+fastmcp==2.3.5                 # MCP server for Claude tool access (2.x — compatible with web3+solana stack)
 fastapi==0.135.1               # Web framework for panel + license server
 uvicorn==0.41.0                # ASGI server
 
@@ -33,7 +34,7 @@ python-dateutil==2.9.0.post0   # Date/time handling
 pytz==2026.1.post1             # Timezone handling
 
 # Config / logging
-python-dotenv==1.1.1           # .env loader — fastmcp 3.1.0 requires >=1.1.0
+python-dotenv==1.1.1           # .env loader
 loguru==0.7.3                  # Structured logging
 rich==14.3.3                   # Terminal output
 
