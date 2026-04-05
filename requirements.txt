@@ -22,11 +22,11 @@ eth-account>=0.13.0            # EVM wallet key management
 
 # HTTP requests for DEXScreener, GoPlus, etc.
 httpx==0.28.1                  # Async HTTP client
-aiohttp==3.10.5                # Async HTTP for concurrent API calls
+aiohttp==3.12.13                # Async HTTP for concurrent API calls
 requests>=2.31.0               # Sync HTTP (coinbase_connector, alt_data_signals)
 
 # Data handling
-python-dotenv==1.0.1           # Loads your API keys from .env file safely
+python-dotenv==1.1.1           # Loads your API keys from .env file safely
 pandas==2.2.2                  # Data analysis for price/volume data
 numpy==1.26.4                  # Math for position sizing calculations
 
@@ -39,7 +39,7 @@ aiosqlite==0.20.0              # Async SQLite for storing trades and positions
 
 # Logging and monitoring
 loguru==0.7.2                  # Clean, readable logs
-rich==13.8.0                   # Pretty terminal output with colors
+rich==14.0.0                   # Pretty terminal output with colors
 
 # MCP server (Phase 3 — Claude Desktop integration)
 fastmcp==3.1.0                 # MCP server for Claude tool access
