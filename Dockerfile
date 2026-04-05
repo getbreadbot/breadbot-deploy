@@ -3,7 +3,7 @@
 # Buyers access the web panel at the Railway-provided URL.
 # Telegram handles mobile alerts. The panel handles everything else.
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # System dependencies:
 #   gcc, libssl-dev        — cryptography, web3, solders
