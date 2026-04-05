@@ -20,7 +20,7 @@ requests==2.32.5               # Sync HTTP
 anyio==4.4.0                   # Async compatibility layer
 
 # MCP / API server
-websockets==15.0.1             # Pinned: fastmcp>=14, web3<16, solana<=15
+websockets==14.1                # fastmcp>=14, solana<=15 (excl.), web3<16
 exceptiongroup==1.2.2          # fastmcp 2.3.5 requires >=1.2.2
 fastmcp==2.3.5                 # MCP server for Claude tool access (2.x — compatible with web3+solana stack)
 fastapi==0.135.1               # Web framework for panel + license server
