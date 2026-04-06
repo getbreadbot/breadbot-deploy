@@ -17,7 +17,6 @@ aiohttp==3.12.13               # Async HTTP for concurrent API calls
 aiofiles==25.1.0               # Async file I/O
 aiosqlite==0.21.0              # Async SQLite
 requests==2.32.5               # Sync HTTP
-anyio==4.4.0                   # Async compatibility layer
 
 # MCP / API server
 websockets==14.1                # fastmcp>=14, solana<=15 (excl.), web3<16
