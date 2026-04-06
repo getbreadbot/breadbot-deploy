@@ -80,9 +80,10 @@ echo "  Panel URL: your Railway service URL"
 echo "  Telegram:  bot will message you when the scanner fires"
 echo ""
 
-# Wait for either process to exit.
-# Railway restarts the whole container if this script exits.
-wait -n $BOT_PID $PANEL_PID
+# Wait on the PANEL only — bot restart is handled by Railway.
+# Panel must stay up for healthcheck; bot crash should not kill the panel.
+
+wait $PANEL_PID
 EXIT_CODE=$?
 echo "A process exited with code $EXIT_CODE — container shutting down"
 exit $EXIT_CODE
