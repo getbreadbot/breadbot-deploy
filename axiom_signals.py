@@ -330,13 +330,14 @@ async def _poll_axiom_stream(client: httpx.AsyncClient) -> None:
                     continue
 
                 # Update stream cache
-                if addr not in _axiom_stream_cache:
+                is_new = addr not in _axiom_stream_cache
+                if is_new:
                     _axiom_stream_cache[addr] = now
                     new_count += 1
 
                 # Queue for scanner if above min mcap and not already seen
                 mcap_sol = float(alert.get("marketCapSol") or 0)
-                if mcap_sol >= AXIOM_MIN_MCAP_SOL and addr not in _axiom_stream_cache:
+                if mcap_sol >= AXIOM_MIN_MCAP_SOL and is_new:
                     _new_token_queue.append({
                         "token_addr": alert.get("tokenAddress", ""),
                         "chain":      "solana",
