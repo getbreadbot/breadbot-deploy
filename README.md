@@ -52,3 +52,6 @@ activity replaces it.
 
 Purchase support: hello@breadbot.app
 Setup guide: included in your purchase confirmation email
+
+## Panel Workers
+The panel runs with workers=4 by default (set in panel/railway.toml). Reduce to 1 if RAM constrained.
