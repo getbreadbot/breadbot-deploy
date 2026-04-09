@@ -579,6 +579,7 @@ const Pages = {
   },
 
   _alertsData: [],
+  _alertsById: {},
 
   async _reloadAlerts() {
     const days     = document.getElementById('filter-days')?.value || 7;
@@ -604,6 +605,7 @@ const Pages = {
   },
 
   _renderAlertsTable(alerts) {
+    const escHtml = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
     const wrap = document.getElementById('alerts-table-wrap');
     if(!wrap) return;
     const cnt = document.getElementById('alert-count');
@@ -620,16 +622,20 @@ const Pages = {
     const pendingCount = sorted.filter(a=>!a.decision||a.decision==='pending').length;
     App.updateAlertBadge(pendingCount);
 
+    // Store alert data for buy button handlers (avoids inline JSON/quote injection)
+    Pages._alertsById = {};
+    sorted.forEach(a => { Pages._alertsById[a.id] = a; });
+
     const rows = sorted.length ? sorted.map((a, i) => {
       const flags = (a.flags || a.rug_flags || []);
       const flagArr = Array.isArray(flags) ? flags : (flags ? String(flags).split(',') : []);
       const flagHtml = flagArr.length
-        ? flagArr.map(f=>`<span class="flag-item">${f.trim()}</span>`).join('')
+        ? flagArr.map(f=>`<span class="flag-item">${escHtml(f.trim())}</span>`).join('')
         : '<span class="flag-item" style="color:var(--accent-green)">No flags</span>';
       const isPending = !a.decision || a.decision === 'pending';
       const actionBtns = isPending
         ? `<div class="action-cell">
-            <button class="btn btn-buy btn-sm" onclick='BuyModal.show(${JSON.stringify(a)})'>✓ Buy</button>
+            <button class="btn btn-buy btn-sm" data-alert-id="${a.id}">✓ Buy</button>
             <button class="btn btn-skip btn-sm" onclick="skipAlert(${a.id})">✕ Skip</button>
            </div>`
         : Fmt.decisionBadge(a.decision);
@@ -640,7 +646,7 @@ const Pages = {
       return `
         <tr class="alert-row${isPending?' alert-pending':''}" data-id="${a.id}" style="animation-delay:${Math.min(i,20)*.03}s;cursor:pointer">
           <td class="td-muted">${Fmt.ago(a.created_at)}</td>
-          <td class="td-mono" style="color:var(--text-primary)">${a.token_name||a.symbol||'?'} <span style="color:var(--text-muted)">${a.symbol||''}</span></td>
+          <td class="td-mono" style="color:var(--text-primary)">${escHtml(a.token_name||a.symbol||'?')} <span style="color:var(--text-muted)">${escHtml(a.symbol||'')} </span></td>
           <td>${Fmt.chainBadge(a.chain)}</td>
           <td>${Fmt.scoreBadge(a.rug_score||a.security_score)}</td>
           <td class="td-mono">${Fmt.usd(a.liquidity)}</td>
@@ -661,6 +667,16 @@ const Pages = {
         <tbody>${rows}</tbody>
       </table></div>
       <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-top:8px">Keyboard: <span class="kbd-hint">B</span> Buy · <span class="kbd-hint">S</span> Skip (hover a row)</div>`;
+
+    // Wire buy buttons using stored alert data (safe from quote injection)
+    wrap.querySelectorAll('[data-alert-id]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = parseInt(btn.dataset.alertId);
+        const alert = Pages._alertsById[id];
+        if(alert) BuyModal.show(alert);
+      });
+    });
 
     wrap.querySelectorAll('.alert-row').forEach(r => {
       r.querySelector('td:last-child')?.addEventListener('click', () => {

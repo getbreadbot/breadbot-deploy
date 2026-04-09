@@ -475,14 +475,20 @@ def api_signals():
     try:
         # Pull latest value per (source, signal_type, market_id)
         rows = conn.execute("""
-            SELECT source, signal_type, market_id, description, value, value_shift, composite_score, timestamp
-            FROM alt_data_signals s1
-            WHERE timestamp = (
-                SELECT MAX(timestamp) FROM alt_data_signals s2
-                WHERE s2.source=s1.source AND s2.signal_type=s1.signal_type
-                  AND s2.market_id IS s1.market_id
-            )
-            ORDER BY timestamp DESC
+            SELECT s.source, s.signal_type, s.market_id, s.description,
+                   s.value, s.value_shift, s.composite_score, s.timestamp
+            FROM alt_data_signals s
+            INNER JOIN (
+                SELECT source, signal_type, market_id, MAX(timestamp) AS max_ts
+                FROM alt_data_signals
+                GROUP BY source, signal_type, market_id
+            ) latest
+              ON s.source    = latest.source
+             AND s.signal_type = latest.signal_type
+             AND (s.market_id IS latest.market_id OR
+                  (s.market_id IS NULL AND latest.market_id IS NULL))
+             AND s.timestamp = latest.max_ts
+            ORDER BY s.timestamp DESC
         """).fetchall()
 
         # Build lookup: (source, signal_type, market_id) -> value
