@@ -150,6 +150,10 @@ def ensure_alt_data_table() -> None:
                 scanner_triggered INTEGER DEFAULT 0
             )
         """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_alt_data_signals_lookup
+            ON alt_data_signals (source, signal_type, market_id, timestamp DESC)
+        """)
         conn.commit()
         log.info("alt_data_signals table ready")
     finally:
