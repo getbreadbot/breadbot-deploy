@@ -113,7 +113,29 @@ async def call_tool(tool_name: str, params: dict = None) -> Any:
 
 @router.get("/status")
 async def get_status(auth=Depends(verify_session)):
-    return await call_tool("get_status")
+    data = await call_tool("get_status")
+    # Normalise field names to match what the React dashboard expects
+    if isinstance(data, dict):
+        # trading_active is the inverse of trading_paused
+        if "trading_paused" in data and "trading_active" not in data:
+            data["trading_active"] = not data["trading_paused"]
+        # Alias today realised PnL
+        if "today_realized_pnl" in data and "total_pnl" not in data:
+            data["total_pnl"] = data["today_realized_pnl"]
+        # Inject config fields the dashboard expects if missing
+        if "max_position_size_pct" not in data:
+            try:
+                import os as _os
+                data["max_position_size_pct"] = float(_os.getenv("MAX_POSITION_SIZE_PCT", "0.02"))
+            except Exception:
+                data["max_position_size_pct"] = 0.02
+        if "max_positions" not in data:
+            try:
+                import os as _os
+                data["max_positions"] = int(_os.getenv("MAX_OPEN_POSITIONS", "5"))
+            except Exception:
+                data["max_positions"] = 5
+    return data
 
 
 @router.get("/positions")
@@ -128,12 +150,51 @@ async def get_yields(auth=Depends(verify_session)):
 
 @router.get("/alerts/history")
 async def get_alert_history(auth=Depends(verify_session)):
-    return await call_tool("get_alert_history")
+    data = await call_tool("get_alert_history")
+    # MCP returns raw DB rows as a list — React expects {"alerts": [...]} with mapped fields
+    raw = data if isinstance(data, list) else data.get("alerts", []) if isinstance(data, dict) else []
+    import json as _jf, time as _t
+    from datetime import datetime as _dt
+    alerts = []
+    for d in raw:
+        ts = 0
+        try:
+            dt = _dt.fromisoformat(d.get("created_at", ""))
+            ts = int(dt.timestamp())
+        except Exception:
+            ts = int(_t.time())
+        flags = []
+        rf = d.get("rug_flags", "") or ""
+        if rf:
+            try:
+                fl = _jf.loads(rf) if rf.startswith("[") else [s.strip() for s in rf.split(",") if s.strip()]
+            except Exception:
+                fl = [s.strip() for s in rf.split(",") if s.strip()]
+            for f in fl:
+                lo = f.lower()
+                ft = "risk" if any(w in lo for w in ["honeypot","blacklist","pause","proxy","high tax","pumped"]) else "warn" if any(w in lo for w in ["mint","owner","concentrated","not locked","unlocked"]) else "ok"
+                flags.append({"label": f, "type": ft})
+        decided = d.get("decision", "pending") not in ("pending", "")
+        alerts.append({
+            "id": d.get("id"), "chain": d.get("chain", ""), "token": d.get("token_name", d.get("symbol", "")),
+            "symbol": d.get("symbol", ""), "contract": d.get("token_addr", ""),
+            "security_score": d.get("rug_score", 0), "price": d.get("price_usd"),
+            "liquidity_usd": d.get("liquidity"), "volume_24h": d.get("volume_24h"),
+            "market_cap": d.get("mcap"), "age_hours": None, "position_size_usd": None,
+            "source": "Scanner", "timestamp": ts, "expires_at": ts + 900,
+            "flags": flags, "actioned": decided,
+            "action": d.get("decision") if decided else None,
+        })
+    return {"alerts": alerts}
 
 
 @router.get("/pnl")
 async def get_pnl(auth=Depends(verify_session)):
-    return await call_tool("daily_pnl")
+    data = await call_tool("daily_pnl")
+    # Alias realized_pnl_usd -> total_pnl for dashboard compatibility
+    if isinstance(data, dict) and "realized_pnl_usd" in data and "total_pnl" not in data:
+        data["total_pnl"] = data["realized_pnl_usd"]
+    return data
 
 
 @router.get("/risk")

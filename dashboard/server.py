@@ -22,7 +22,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import httpx
-from fastapi import FastAPI, Query, HTTPException, Response
+from fastapi import FastAPI, Query, HTTPException, Response, WebSocket
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -1309,9 +1309,300 @@ def api_execution_config_post(body: ExecutionConfigBody):
         conn.close()
 
 
+
+# ══ PANEL-COMPATIBLE ROUTES (auto-generated) ══════════════════════════
+
+@app.get("/api/auth/status")
+def auth_status_stub():
+    return {"configured": True}
+
+@app.get("/api/auth/me")
+def auth_me_stub():
+    return {"authenticated": True}
+
+@app.post("/api/auth/login")
+def auth_login_stub():
+    return {"ok": True}
+
+@app.post("/api/auth/logout")
+def auth_logout_stub():
+    return {"ok": True}
+
+@app.post("/api/auth/setup")
+def auth_setup_stub():
+    return {"ok": True}
+
+@app.get("/api/bot/status")
+async def bot_status():
+    db = get_db()
+    if not db:
+        return {"trading_active": False, "open_positions": 0, "total_pnl": 0}
+    try:
+        c = db.cursor()
+        paused = False
+        try:
+            row = c.execute("SELECT value FROM bot_config WHERE key='trading_paused'").fetchone()
+            if row: paused = str(row["value"]) == "1"
+        except Exception: pass
+        positions = c.execute("SELECT COUNT(*) as cnt FROM positions WHERE status='open'").fetchone()
+        open_pos = positions["cnt"] if positions else 0
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        pnl_row = c.execute("SELECT COALESCE(SUM(pnl_usd),0) as pnl FROM trades WHERE DATE(executed_at)=? AND pnl_usd IS NOT NULL", (today,)).fetchone()
+        total_pnl = round(pnl_row["pnl"], 2) if pnl_row else 0
+        exec_mode = "manual"
+        try:
+            em = c.execute("SELECT value FROM bot_config WHERE key='execution_mode'").fetchone()
+            if em: exec_mode = em["value"]
+        except Exception: pass
+        return {"trading_active": not paused, "trading_paused": paused, "open_positions": open_pos,
+                "total_pnl": total_pnl, "today_realized_pnl": total_pnl,
+                "max_position_size_pct": float(os.environ.get("MAX_POSITION_SIZE_PCT","0.02")),
+                "max_positions": int(os.environ.get("MAX_OPEN_POSITIONS","5")),
+                "execution_mode": exec_mode,
+                "daily_loss_limit_pct": float(os.environ.get("DAILY_LOSS_LIMIT_PCT","0.05"))}
+    finally: db.close()
+
+@app.get("/api/bot/positions")
+async def bot_positions():
+    db = get_db()
+    if not db: return []
+    try:
+        rows = db.execute("SELECT * FROM positions WHERE status='open' ORDER BY opened_at DESC").fetchall()
+        return rows_to_dicts(rows)
+    finally: db.close()
+
+@app.get("/api/bot/yields")
+async def bot_yields():
+    db = get_db()
+    if not db: return []
+    try:
+        rows = db.execute("""SELECT ys.* FROM yield_snapshots ys
+            INNER JOIN (SELECT platform, asset, MAX(recorded_at) as max_ts FROM yield_snapshots GROUP BY platform, asset) latest
+            ON ys.platform=latest.platform AND ys.asset=latest.asset AND ys.recorded_at=latest.max_ts ORDER BY ys.apy DESC""").fetchall()
+        return rows_to_dicts(rows)
+    finally: db.close()
+
+@app.get("/api/bot/alerts/history")
+async def bot_alerts_history():
+    db = get_db()
+    if not db: return {"alerts": []}
+    try:
+        rows = db.execute("SELECT * FROM meme_alerts ORDER BY created_at DESC LIMIT 200").fetchall()
+        alerts = []
+        for r in rows:
+            d = dict(r)
+            # Parse created_at to unix timestamp
+            ts = 0
+            try:
+                from datetime import datetime as _dt
+                dt = _dt.fromisoformat(d.get("created_at", ""))
+                ts = int(dt.timestamp())
+            except Exception:
+                ts = int(time.time())
+            # Parse rug_flags into structured flags list
+            flags = []
+            raw_flags = d.get("rug_flags", "") or ""
+            if raw_flags:
+                import json as _jf
+                try:
+                    flag_list = _jf.loads(raw_flags) if raw_flags.startswith("[") else [s.strip() for s in raw_flags.split(",") if s.strip()]
+                except Exception:
+                    flag_list = [s.strip() for s in raw_flags.split(",") if s.strip()]
+                for f in flag_list:
+                    fl = f.lower()
+                    ftype = "risk" if any(w in fl for w in ["honeypot","blacklist","pause","proxy","high tax","pumped"]) else "warn" if any(w in fl for w in ["mint","owner","concentrated","not locked","unlocked"]) else "ok"
+                    flags.append({"label": f, "type": ftype})
+            decided = d.get("decision", "pending") not in ("pending", "")
+            alerts.append({
+                "id": d.get("id"),
+                "chain": d.get("chain", ""),
+                "token": d.get("token_name", d.get("symbol", "")),
+                "symbol": d.get("symbol", ""),
+                "contract": d.get("token_addr", ""),
+                "security_score": d.get("rug_score", 0),
+                "price": d.get("price_usd"),
+                "liquidity_usd": d.get("liquidity"),
+                "volume_24h": d.get("volume_24h"),
+                "market_cap": d.get("mcap"),
+                "age_hours": None,
+                "position_size_usd": None,
+                "source": "Scanner",
+                "timestamp": ts,
+                "expires_at": ts + 900,
+                "flags": flags,
+                "actioned": decided,
+                "action": d.get("decision") if decided else None,
+            })
+        return {"alerts": alerts}
+    finally: db.close()
+
+@app.get("/api/bot/pnl")
+async def bot_pnl():
+    db = get_db()
+    if not db: return {"total_pnl": 0, "trade_count": 0}
+    try:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        row = db.execute("SELECT COALESCE(SUM(pnl_usd),0) as pnl, COUNT(*) as cnt FROM trades WHERE DATE(executed_at)=? AND pnl_usd IS NOT NULL", (today,)).fetchone()
+        return {"total_pnl": round(row["pnl"],2) if row else 0, "realized_pnl_usd": round(row["pnl"],2) if row else 0, "trade_count": row["cnt"] if row else 0}
+    finally: db.close()
+
+@app.get("/api/bot/strategy/performance")
+async def bot_strategy_performance():
+    db = get_db()
+    if not db: return {"scanner":{"pnl":0,"trades":0},"grid":{"pnl":0,"cycles":0},"funding":{"pnl":0,"collected":0}}
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
+        sr = db.execute("SELECT COALESCE(SUM(pnl_usd),0) as pnl, COUNT(*) as cnt FROM trades WHERE pnl_usd IS NOT NULL AND DATE(executed_at)>=?", (cutoff,)).fetchone()
+        grid_pnl, grid_cycles, fund_collected = 0, 0, 0
+        try:
+            gr = db.execute("SELECT COALESCE(SUM(profit_usd),0) as pnl, COUNT(*) as cnt FROM grid_fills WHERE DATE(filled_at)>=?", (cutoff,)).fetchone()
+            if gr: grid_pnl, grid_cycles = round(gr["pnl"],2), gr["cnt"]
+        except: pass
+        try:
+            fr = db.execute("SELECT COALESCE(SUM(funding_collected_usd),0) as c FROM funding_positions WHERE DATE(opened_at)>=?", (cutoff,)).fetchone()
+            if fr: fund_collected = round(fr["c"],2)
+        except: pass
+        return {"scanner":{"pnl":round(sr["pnl"],2) if sr else 0,"trades":sr["cnt"] if sr else 0},"grid":{"pnl":grid_pnl,"cycles":grid_cycles},"funding":{"pnl":fund_collected,"collected":fund_collected}}
+    finally: db.close()
+
+@app.get("/api/bot/grid/status")
+async def bot_grid_status():
+    db = get_db()
+    if not db: return {"state":"STANDBY","pair":"","profit_usd":0,"completed_cycles":0}
+    try:
+        state = "STANDBY"
+        try:
+            row = db.execute("SELECT value FROM bot_config WHERE key='grid_state'").fetchone()
+            if row: state = row["value"]
+        except: pass
+        profit, cycles = 0, 0
+        try:
+            gr = db.execute("SELECT COALESCE(SUM(profit_usd),0) as pnl, COUNT(*) as cnt FROM grid_fills").fetchone()
+            if gr: profit, cycles = round(gr["pnl"],2), gr["cnt"]
+        except: pass
+        return {"state":state,"pair":os.environ.get("GRID_PAIR","BTC/USDT"),"profit_usd":profit,"completed_cycles":cycles,
+                "upper_pct":float(os.environ.get("GRID_UPPER_PCT","10")),"lower_pct":float(os.environ.get("GRID_LOWER_PCT","10")),
+                "num_levels":int(os.environ.get("GRID_NUM_LEVELS","20")),"rsi_guard":os.environ.get("GRID_RSI_GUARD","true").lower()=="true"}
+    finally: db.close()
+
+@app.get("/api/bot/funding/rates")
+async def bot_funding_rates():
+    db = get_db()
+    if not db: return []
+    try:
+        rows = db.execute("""SELECT fr.* FROM funding_rate_history fr
+            INNER JOIN (SELECT pair, MAX(recorded_at) as max_ts FROM funding_rate_history GROUP BY pair) latest
+            ON fr.pair=latest.pair AND fr.recorded_at=latest.max_ts ORDER BY fr.pair""").fetchall()
+        return rows_to_dicts(rows)
+    except: return []
+    finally: db.close()
+
+@app.get("/api/bot/funding/positions")
+async def bot_funding_positions():
+    db = get_db()
+    if not db: return []
+    try:
+        rows = db.execute("SELECT * FROM funding_positions WHERE closed_at IS NULL ORDER BY opened_at DESC").fetchall()
+        return rows_to_dicts(rows)
+    except: return []
+    finally: db.close()
+
+@app.get("/api/bot/channels")
+async def bot_channels():
+    db = get_db()
+    if not db: return {"channels":[]}
+    try:
+        rows = db.execute("SELECT * FROM alpha_channels ORDER BY label").fetchall()
+        return {"channels": rows_to_dicts(rows)}
+    except: return {"channels":[]}
+    finally: db.close()
+
+@app.get("/api/bot/channels/hits")
+async def bot_channels_hits():
+    db = get_db()
+    if not db: return {"hits":[]}
+    try:
+        rows = db.execute("SELECT * FROM alpha_channel_hits ORDER BY detected_at DESC LIMIT 50").fetchall()
+        return {"hits": rows_to_dicts(rows)}
+    except: return {"hits":[]}
+    finally: db.close()
+
+@app.get("/api/bot/backtest/results")
+async def bot_backtest_results():
+    import json as _json
+    p = Path(__file__).parent.parent / "data" / "backtest_last.json"
+    if p.exists():
+        try:
+            with open(p) as f: return _json.load(f)
+        except: pass
+    return {"status":"no_results"}
+
+@app.get("/api/bot/pnl/history")
+async def bot_pnl_history(days: int = 30):
+    db = get_db()
+    if not db: return []
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        rows = db.execute("SELECT DATE(executed_at) as date, COALESCE(SUM(pnl_usd),0) as pnl, COUNT(*) as trades FROM trades WHERE pnl_usd IS NOT NULL AND DATE(executed_at)>=? GROUP BY DATE(executed_at) ORDER BY DATE(executed_at)", (cutoff,)).fetchall()
+        return rows_to_dicts(rows)
+    finally: db.close()
+
+@app.get("/api/settings/basic")
+async def settings_basic():
+    return {"MAX_POSITION_SIZE_PCT":os.environ.get("MAX_POSITION_SIZE_PCT","0.02"),
+            "DAILY_LOSS_LIMIT_PCT":os.environ.get("DAILY_LOSS_LIMIT_PCT","0.05"),
+            "MIN_LIQUIDITY_USD":os.environ.get("MIN_LIQUIDITY_USD","15000"),
+            "MIN_VOLUME_24H_USD":os.environ.get("MIN_VOLUME_24H_USD","40000"),
+            "AUTO_EXECUTE_MIN_SCORE":os.environ.get("AUTO_EXECUTE_MIN_SCORE","83"),
+            "ALERT_CHANNEL":os.environ.get("ALERT_CHANNEL","solana"),
+            "AUTO_EXECUTE":os.environ.get("AUTO_EXECUTE","auto")}
+
+@app.get("/api/settings/advanced")
+async def settings_advanced():
+    keys = ["COINBASE_API_KEY","COINBASE_SECRET_KEY","KRAKEN_API_KEY","KRAKEN_SECRET_KEY",
+            "BYBIT_API_KEY","BYBIT_SECRET_KEY","BINANCE_API_KEY","BINANCE_SECRET_KEY",
+            "GEMINI_API_KEY","GEMINI_SECRET_KEY","TELEGRAM_BOT_TOKEN","TELEGRAM_CHAT_ID",
+            "SOLANA_RPC_URL","EVM_BASE_RPC_URL","JITO_ENABLED","FLASHBOTS_PROTECT_ENABLED",
+            "GRID_ENABLED","FUNDING_ARB_ENABLED","PENDLE_ENABLED","ROBINHOOD_ENABLED"]
+    masked = {k: ("********" if os.environ.get(k) else "") for k in keys}
+    has_value = {k: bool(os.environ.get(k)) for k in keys}
+    return {"masked": masked, "set": has_value}
+
+@app.post("/api/settings/basic")
+async def save_settings_basic_stub(): return {"saved": {}, "demo": True}
+@app.post("/api/settings/advanced")
+async def save_settings_advanced_stub(): return {"saved": False, "demo": True}
+@app.post("/api/bot/backtest/trigger")
+async def backtest_trigger_stub(): return {"status": "demo_mode"}
+@app.post("/api/bot/channels")
+async def add_channel_stub(): return {"ok": False, "demo": True}
+@app.post("/api/bot/grid/start")
+async def grid_start_stub(): return {"ok": False, "demo": True}
+@app.post("/api/bot/grid/stop")
+async def grid_stop_stub(): return {"ok": False, "demo": True}
+@app.post("/api/bot/positions/close")
+async def close_position_stub(): return {"ok": False, "demo": True}
+@app.post("/api/bot/rebalance/confirm")
+async def rebalance_confirm_stub(): return {"ok": False, "demo": True}
+
+@app.websocket("/api/ws/alerts")
+async def ws_alerts_stub(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            await asyncio.sleep(30)
+            try: await websocket.send_json({"type": "ping"})
+            except: break
+    except: pass
+
+
 static_dir = Path(__file__).parent / "static"
 static_dir.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+_panel_dist = Path(__file__).parent / "panel_dist"
+if _panel_dist.exists() and (_panel_dist / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=str(_panel_dist / "assets")), name="panel_assets")
 
 
 # ── Setup Wizard Endpoints ────────────────────────────────────────────────────
@@ -1415,19 +1706,21 @@ async def api_setup_test_telegram(body: SetupTestBody):
         return JSONResponse({"ok": False, "error": str(e)})
 
 
+@app.get("/terms.html")
+def serve_terms():
+    t = Path(__file__).parent / "panel_dist" / "terms.html"
+    if t.exists(): return FileResponse(str(t))
+    return JSONResponse({"error": "Not found"}, status_code=404)
+
 @app.get("/")
 @app.get("/{path:path}")
 def serve_frontend(path: str = ""):
+    panel_index = Path(__file__).parent / "panel_dist" / "index.html"
+    if panel_index.exists():
+        return FileResponse(str(panel_index),
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"})
     index = Path(__file__).parent / "static" / "index.html"
-    if index.exists():
-        return FileResponse(
-            str(index),
-            headers={
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                "Pragma": "no-cache",
-                "Expires": "0",
-            }
-        )
+    if index.exists(): return FileResponse(str(index))
     return JSONResponse({"error": "Frontend not ready"}, status_code=503)
 
 
