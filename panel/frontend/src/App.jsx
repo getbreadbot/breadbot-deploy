@@ -62,6 +62,7 @@ export default function App() {
           <Route path="funding"    element={<FundingArb />} />
           <Route path="performance" element={<Performance />} />
           <Route path="channels"     element={<SignalChannels />} />
+          <Route path="backtest"    element={<Backtest />} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -140,12 +140,25 @@ async def get_status(auth=Depends(verify_session)):
 
 @router.get("/positions")
 async def get_positions(auth=Depends(verify_session)):
-    return await call_tool("get_positions")
+    data = await call_tool("get_positions")
+    raw = data if isinstance(data, list) else data.get("positions", []) if isinstance(data, dict) else []
+    return {"positions": raw}
 
 
 @router.get("/yields")
 async def get_yields(auth=Depends(verify_session)):
-    return await call_tool("get_yields")
+    data = await call_tool("get_yields")
+    raw = data if isinstance(data, list) else data.get("yields", []) if isinstance(data, dict) else []
+    platforms = []
+    for d in raw:
+        if isinstance(d, dict):
+            platforms.append({
+                "platform": d.get("platform", ""),
+                "apy": d.get("apy", 0),
+                "type": d.get("asset", "USDC"),
+                "current": False,
+            })
+    return {"platforms": platforms, "rebalance_threshold": float(os.environ.get("REBALANCE_THRESHOLD_PCT", "1.5"))}
 
 
 @router.get("/alerts/history")
@@ -298,12 +311,27 @@ async def grid_stop(auth=Depends(verify_session)):
 
 @router.get("/funding/rates")
 async def funding_rates(auth=Depends(verify_session)):
-    return await call_tool("get_funding_rates")
+    data = await call_tool("get_funding_rates")
+    arb_exchange = os.environ.get("FUNDING_ARB_EXCHANGE", "bybit")
+    entry_t = float(os.environ.get("FUNDING_RATE_ENTRY_THRESHOLD", "0.01"))
+    exit_t = float(os.environ.get("FUNDING_RATE_EXIT_THRESHOLD", "0.005"))
+    arb_enabled = os.environ.get("FUNDING_ARB_ENABLED", "false").lower() in ("true", "1")
+    venue_map = {"bybit": ("Bybit", "amber", None), "binance": ("Binance.US", "amber", True), "coinbase_cfm": ("Coinbase CFM", "green", True)}
+    vl, vc, vlu = venue_map.get(arb_exchange, (arb_exchange, "amber", None))
+    raw = data if isinstance(data, list) else data.get("rates", []) if isinstance(data, dict) else []
+    rates = []
+    for d in raw:
+        if isinstance(d, dict):
+            rate = d.get("rate_8h", d.get("rate", 0)) or 0
+            rates.append({"pair": (d.get("pair","") or "").replace("USDT","").replace("/",""), "rate_8h_pct": rate, "annualized_pct": rate*3*365, "above_entry": abs(rate) >= entry_t})
+    return {"arb_exchange": arb_exchange, "venue_label": vl, "venue_color": vc, "venue_legal_us": vlu, "arb_enabled": arb_enabled, "entry_threshold_pct": entry_t, "exit_threshold_pct": exit_t, "rates": rates}
 
 
 @router.get("/funding/positions")
 async def funding_positions(auth=Depends(verify_session)):
-    return await call_tool("get_funding_positions")
+    data = await call_tool("get_funding_positions")
+    raw = data if isinstance(data, list) else data.get("positions", []) if isinstance(data, dict) else []
+    return {"positions": raw}
 
 
 # ── Strategy performance ──────────────────────────────────────────────────────

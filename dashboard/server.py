@@ -1365,21 +1365,39 @@ async def bot_status():
 @app.get("/api/bot/positions")
 async def bot_positions():
     db = get_db()
-    if not db: return []
+    if not db: return {"positions": []}
     try:
         rows = db.execute("SELECT * FROM positions WHERE status='open' ORDER BY opened_at DESC").fetchall()
-        return rows_to_dicts(rows)
+        return {"positions": rows_to_dicts(rows)}
     finally: db.close()
 
 @app.get("/api/bot/yields")
 async def bot_yields():
     db = get_db()
-    if not db: return []
+    if not db: return {"platforms": [], "rebalance_threshold": 1.5}
     try:
         rows = db.execute("""SELECT ys.* FROM yield_snapshots ys
             INNER JOIN (SELECT platform, asset, MAX(recorded_at) as max_ts FROM yield_snapshots GROUP BY platform, asset) latest
             ON ys.platform=latest.platform AND ys.asset=latest.asset AND ys.recorded_at=latest.max_ts ORDER BY ys.apy DESC""").fetchall()
-        return rows_to_dicts(rows)
+        platforms = []
+        for r in rows:
+            d = dict(r)
+            platforms.append({
+                "platform": d.get("platform", ""),
+                "apy": d.get("apy", 0),
+                "type": d.get("asset", "USDC"),
+                "current": False,
+            })
+        last_ts = None
+        if platforms:
+            try:
+                ts_row = db.execute("SELECT MAX(recorded_at) as ts FROM yield_snapshots").fetchone()
+                if ts_row and ts_row["ts"]:
+                    from datetime import datetime as _dt2
+                    last_ts = int(_dt2.fromisoformat(ts_row["ts"]).timestamp())
+            except Exception:
+                pass
+        return {"platforms": platforms, "rebalance_threshold": float(os.environ.get("REBALANCE_THRESHOLD_PCT", "1.5")), "last_updated": last_ts}
     finally: db.close()
 
 @app.get("/api/bot/alerts/history")
@@ -1488,23 +1506,49 @@ async def bot_grid_status():
 @app.get("/api/bot/funding/rates")
 async def bot_funding_rates():
     db = get_db()
-    if not db: return []
+    arb_exchange = os.environ.get("FUNDING_ARB_EXCHANGE", "bybit")
+    entry_t = float(os.environ.get("FUNDING_RATE_ENTRY_THRESHOLD", "0.01"))
+    exit_t = float(os.environ.get("FUNDING_RATE_EXIT_THRESHOLD", "0.005"))
+    arb_enabled = os.environ.get("FUNDING_ARB_ENABLED", "false").lower() in ("true", "1")
+    venue_map = {
+        "bybit": ("Bybit", "amber", None),
+        "binance": ("Binance.US", "amber", True),
+        "coinbase_cfm": ("Coinbase CFM", "green", True),
+    }
+    vl, vc, vlu = venue_map.get(arb_exchange, (arb_exchange, "amber", None))
+    base = {
+        "arb_exchange": arb_exchange,
+        "venue_label": vl, "venue_color": vc, "venue_legal_us": vlu,
+        "arb_enabled": arb_enabled,
+        "entry_threshold_pct": entry_t, "exit_threshold_pct": exit_t,
+        "rates": [],
+    }
+    if not db: return base
     try:
         rows = db.execute("""SELECT fr.* FROM funding_rate_history fr
             INNER JOIN (SELECT pair, MAX(recorded_at) as max_ts FROM funding_rate_history GROUP BY pair) latest
             ON fr.pair=latest.pair AND fr.recorded_at=latest.max_ts ORDER BY fr.pair""").fetchall()
-        return rows_to_dicts(rows)
-    except: return []
+        for r in rows:
+            d = dict(r)
+            rate = d.get("rate_8h", d.get("rate", 0)) or 0
+            base["rates"].append({
+                "pair": (d.get("pair", "") or "").replace("USDT", "").replace("/", ""),
+                "rate_8h_pct": rate,
+                "annualized_pct": rate * 3 * 365,
+                "above_entry": abs(rate) >= entry_t,
+            })
+        return base
+    except: return base
     finally: db.close()
 
 @app.get("/api/bot/funding/positions")
 async def bot_funding_positions():
     db = get_db()
-    if not db: return []
+    if not db: return {"positions": []}
     try:
         rows = db.execute("SELECT * FROM funding_positions WHERE closed_at IS NULL ORDER BY opened_at DESC").fetchall()
-        return rows_to_dicts(rows)
-    except: return []
+        return {"positions": rows_to_dicts(rows)}
+    except: return {"positions": []}
     finally: db.close()
 
 @app.get("/api/bot/channels")

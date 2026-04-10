@@ -137,7 +137,7 @@ function AlertCard({ alert, onDecision }) {
 
 export default function Alerts() {
   const [alerts, setAlerts] = useState([])
-  const [filter, setFilter] = useState('pending') // pending | all
+  const [filter, setFilter] = useState('all') // pending | all
   const [connected, setConnected] = useState(false)
   const wsRef = useRef(null)
 
