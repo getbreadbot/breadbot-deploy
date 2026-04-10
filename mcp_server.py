@@ -734,15 +734,26 @@ def trigger_backtest(
     output = Path(__file__).parent / "data" / "backtest_last.json"
     log    = Path("/tmp/backtest_mcp.log")
 
-    cmd = (
-        f"python3 -u {script} "
+    # All output goes to log file. A wrapper script extracts the final JSON
+    # line after completion and writes it to backtest_last.json only if valid.
+    wrapper = Path("/tmp/backtest_wrapper.sh")
+    wrapper.write_text(
+        f"#!/bin/bash\n"
+        f"{script.parent / 'venv/bin/python3'} -u {script} "
         f"--mode {_shlex.quote(mode)} "
         f"--min-score {int(min_score)} "
         f"--days {int(days)} "
         f"--json "
-        f"> {output} 2>{log} "
-        f"& echo $!"
+        f"> {log} 2>&1\n"
+        f"# Extract last line (JSON result) and validate before writing\n"
+        f"LAST=$(tail -1 {log})\n"
+        f"echo \"$LAST\" | python3 -c \"import json,sys; json.load(sys.stdin)\" 2>/dev/null\n"
+        f"if [ $? -eq 0 ]; then\n"
+        f"  echo \"$LAST\" > {output}\n"
+        f"fi\n"
     )
+    wrapper.chmod(0o755)
+    cmd = f"bash {wrapper} & echo $!"
     try:
         result = _subprocess.run(
             cmd, shell=True, capture_output=True, text=True, timeout=5

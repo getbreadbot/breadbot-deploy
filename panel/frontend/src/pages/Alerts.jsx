@@ -138,14 +138,17 @@ function AlertCard({ alert, onDecision }) {
 export default function Alerts() {
   const [alerts, setAlerts] = useState([])
   const [filter, setFilter] = useState('all') // pending | all
+  const [loading, setLoading] = useState(true)
   const [connected, setConnected] = useState(false)
   const wsRef = useRef(null)
 
   // Load history on mount
   useEffect(() => {
     get('/bot/alerts/history').then(data => {
-      if (data?.alerts) setAlerts(data.alerts.reverse())
-    }).catch(() => {})
+      if (data?.alerts) setAlerts([...data.alerts].reverse())
+    }).catch(e => {
+      console.error('Failed to load alerts:', e)
+    }).finally(() => setLoading(false))
   }, [])
 
   // WebSocket for real-time alerts
@@ -232,7 +235,9 @@ export default function Alerts() {
         </div>
       </div>
 
-      {displayed.length === 0 ? (
+      {loading ? (
+        <div className="loading"><div className="spinner" />Loading alerts...</div>
+      ) : displayed.length === 0 ? (
         <div className="empty">
           <div className="empty-icon">◎</div>
           {filter === 'pending' ? 'No pending alerts. The scanner runs every 5 minutes.' : 'No alerts yet.'}
