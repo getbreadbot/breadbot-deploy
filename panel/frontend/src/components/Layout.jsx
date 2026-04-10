@@ -123,32 +123,31 @@ export default function Layout() {
 
       <main className="main">
         <Outlet />
+        <footer style={{
+          borderTop: '1px solid var(--border)',
+          padding: '10px 20px',
+          marginTop: 'auto',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'flex-end',
+          gap: 16,
+          fontSize: 11,
+          color: 'var(--text-3)',
+        }}>
+          <a
+            href="/terms.html"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'var(--text-3)', textDecoration: 'none' }}
+            onMouseOver={e => e.target.style.color = 'var(--amber)'}
+            onMouseOut={e => e.target.style.color = 'var(--text-3)'}
+          >
+            Terms of Service
+          </a>
+          <span style={{ opacity: 0.4 }}>|</span>
+          <span>Breadbot LLC &copy; 2026</span>
+        </footer>
       </main>
-
-      <footer style={{
-        gridArea: 'main',
-        borderTop: '1px solid var(--border)',
-        padding: '10px 20px',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'flex-end',
-        gap: 16,
-        fontSize: 11,
-        color: 'var(--text-3)',
-      }}>
-        <a
-          href="/terms.html"
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ color: 'var(--text-3)', textDecoration: 'none' }}
-          onMouseOver={e => e.target.style.color = 'var(--amber)'}
-          onMouseOut={e => e.target.style.color = 'var(--text-3)'}
-        >
-          Terms of Service
-        </a>
-        <span style={{ opacity: 0.4 }}>|</span>
-        <span>Breadbot LLC &copy; 2026</span>
-      </footer>
     </div>
   )
 }

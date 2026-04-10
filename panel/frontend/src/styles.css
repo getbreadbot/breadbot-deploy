@@ -140,6 +140,8 @@ a:hover { text-decoration: underline; }
 }
 
 .main {
+  display: flex;
+  flex-direction: column;
   grid-area: main;
   overflow-y: auto;
   padding: 28px 32px;
