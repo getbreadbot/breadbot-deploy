@@ -338,12 +338,43 @@ async def funding_positions(auth=Depends(verify_session)):
 
 @router.get("/strategy/performance")
 async def strategy_performance(auth=Depends(verify_session)):
-    return await call_tool("get_strategy_performance")
+    data = await call_tool("get_strategy_performance")
+    if isinstance(data, dict):
+        # Ensure grid has volume_usd and profit_usd
+        g = data.get("grid", {})
+        if isinstance(g, dict):
+            g.setdefault("volume_usd", 0)
+            g.setdefault("profit_usd", g.get("pnl", 0))
+            data["grid"] = g
+        # Normalize funding -> funding_arb
+        if "funding" in data and "funding_arb" not in data:
+            fa = data.pop("funding")
+            if isinstance(fa, dict):
+                fa.setdefault("funding_collected_usd", fa.get("collected", 0))
+                fa.setdefault("open_positions", 0)
+            data["funding_arb"] = fa
+        fa2 = data.get("funding_arb", {})
+        if isinstance(fa2, dict):
+            fa2.setdefault("closed_pnl_usd", fa2.get("pnl", 0))
+        data.setdefault("yield_rebalancer", {"rebalances": 0, "yield_gained_usd": 0})
+    return data
 
 
 @router.get("/pnl/history")
 async def pnl_history(days: int = 30, auth=Depends(verify_session)):
-    return await call_tool("pnl_history", {"days": days})
+    data = await call_tool("pnl_history", {"days": days})
+    if isinstance(data, list):
+        cumulative = 0
+        for d in data:
+            if isinstance(d, dict):
+                net = d.get("pnl", d.get("net", 0)) or 0
+                cumulative += net
+                d.setdefault("net", net)
+                d.setdefault("realized_pnl", net)
+                d.setdefault("yield_earned", 0)
+                d.setdefault("fees_paid", 0)
+                d.setdefault("cumulative", round(cumulative, 4))
+    return data
 
 @router.delete("/channels/{channel_id}")
 async def remove_channel(channel_id: str, auth=Depends(verify_session)):

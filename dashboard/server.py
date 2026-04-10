@@ -1480,7 +1480,7 @@ async def bot_strategy_performance():
             fr = db.execute("SELECT COALESCE(SUM(funding_collected_usd),0) as c FROM funding_positions WHERE DATE(opened_at)>=?", (cutoff,)).fetchone()
             if fr: fund_collected = round(fr["c"],2)
         except: pass
-        return {"scanner":{"pnl":round(sr["pnl"],2) if sr else 0,"trades":sr["cnt"] if sr else 0},"grid":{"pnl":grid_pnl,"cycles":grid_cycles},"funding":{"pnl":fund_collected,"collected":fund_collected}}
+        return {"scanner":{"pnl":round(sr["pnl"],2) if sr else 0,"trades":sr["cnt"] if sr else 0},"grid":{"pnl":grid_pnl,"profit_usd":grid_pnl,"cycles":grid_cycles,"volume_usd":0},"funding_arb":{"pnl":fund_collected,"collected":fund_collected,"funding_collected_usd":fund_collected,"open_positions":0}}
     finally: db.close()
 
 @app.get("/api/bot/grid/status")
@@ -1588,7 +1588,14 @@ async def bot_pnl_history(days: int = 30):
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
         rows = db.execute("SELECT DATE(executed_at) as date, COALESCE(SUM(pnl_usd),0) as pnl, COUNT(*) as trades FROM trades WHERE pnl_usd IS NOT NULL AND DATE(executed_at)>=? GROUP BY DATE(executed_at) ORDER BY DATE(executed_at)", (cutoff,)).fetchall()
-        return rows_to_dicts(rows)
+        result = []
+        cumulative = 0
+        for r in rows:
+            d = dict(r)
+            net = d.get("pnl", 0) or 0
+            cumulative += net
+            result.append({"date": d.get("date"), "pnl": net, "net": net, "realized_pnl": net, "trades": d.get("trades", 0), "yield_earned": 0, "fees_paid": 0, "cumulative": round(cumulative, 4)})
+        return result
     finally: db.close()
 
 @app.get("/api/settings/basic")

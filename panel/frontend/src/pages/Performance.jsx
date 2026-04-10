@@ -95,8 +95,8 @@ function StatCard({ label, value, sub, positive, neutral }) {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────
-const fmt  = (n) => (n >= 0 ? '+' : '') + n.toFixed(2)
-const fmtn = (n) => n.toFixed(4)
+const fmt  = (n) => { n = n ?? 0; return (n >= 0 ? '+' : '') + n.toFixed(2) }
+const fmtn = (n) => (n ?? 0).toFixed(4)
 
 export default function Performance() {
   const [perf, setPerf]     = useState(null)
@@ -125,11 +125,11 @@ export default function Performance() {
   useEffect(() => { load(range) }, [range, load])
 
   // Derived totals from history
-  const totalNet   = history.reduce((s, d) => s + d.net, 0)
-  const totalYield = history.reduce((s, d) => s + d.yield_earned, 0)
-  const totalFees  = history.reduce((s, d) => s + d.fees_paid, 0)
-  const totalTrades = history.reduce((s, d) => s + d.trades, 0)
-  const latestCumulative = history.length > 0 ? history[history.length - 1].cumulative : 0
+  const totalNet   = history.reduce((s, d) => s + (d.net ?? d.pnl ?? 0), 0)
+  const totalYield = history.reduce((s, d) => s + (d.yield_earned ?? 0), 0)
+  const totalFees  = history.reduce((s, d) => s + (d.fees_paid ?? 0), 0)
+  const totalTrades = history.reduce((s, d) => s + (d.trades ?? 0), 0)
+  const latestCumulative = history.length > 0 ? (history[history.length - 1]?.cumulative ?? 0) : 0
 
   if (loading) return <div className="loading"><div className="spinner" />Loading performance...</div>
 
@@ -211,14 +211,14 @@ export default function Performance() {
               <tr>
                 <td style={{ fontWeight: 600 }}>Grid trading</td>
                 <td style={{ color: 'var(--text-3)', fontSize: 13 }}>
-                  {perf.grid.cycles} cycles · ${perf.grid.volume_usd.toLocaleString()} volume
+                  {perf.grid?.cycles ?? 0} cycles · ${(perf.grid?.volume_usd ?? 0).toLocaleString()} volume
                 </td>
                 <td className="mono"
-                  style={{ color: perf.grid.profit_usd > 0 ? 'var(--green)' : 'var(--text-3)' }}>
-                  {fmt(perf.grid.profit_usd)}
+                  style={{ color: (perf.grid?.profit_usd ?? 0) > 0 ? 'var(--green)' : 'var(--text-3)' }}>
+                  {fmt(perf.grid?.profit_usd ?? 0)}
                 </td>
                 <td>
-                  {perf.grid.cycles > 0
+                  {(perf.grid?.cycles ?? 0) > 0
                     ? <span className="tag tag-green">Active</span>
                     : <span className="tag" style={{ background:'var(--bg-3)', color:'var(--text-3)' }}>No cycles yet</span>}
                 </td>
@@ -226,15 +226,15 @@ export default function Performance() {
               <tr>
                 <td style={{ fontWeight: 600 }}>Funding arb</td>
                 <td style={{ color: 'var(--text-3)', fontSize: 13 }}>
-                  {perf.funding_arb.open_positions} open ·{' '}
-                  ${fmtn(perf.funding_arb.funding_collected_usd)} collected
+                  {perf.funding_arb?.open_positions ?? 0} open ·{' '}
+                  ${fmtn(perf.funding_arb?.funding_collected_usd ?? 0)} collected
                 </td>
                 <td className="mono"
-                  style={{ color: perf.funding_arb.closed_pnl_usd > 0 ? 'var(--green)' : 'var(--text-3)' }}>
-                  {fmt(perf.funding_arb.closed_pnl_usd)}
+                  style={{ color: (perf.funding_arb?.closed_pnl_usd ?? 0) > 0 ? 'var(--green)' : 'var(--text-3)' }}>
+                  {fmt(perf.funding_arb?.closed_pnl_usd ?? 0)}
                 </td>
                 <td>
-                  {perf.funding_arb.open_positions > 0
+                  {(perf.funding_arb?.open_positions ?? 0) > 0
                     ? <span className="tag tag-green">Positions open</span>
                     : <span className="tag" style={{ background:'var(--bg-3)', color:'var(--text-3)' }}>No positions</span>}
                 </td>
@@ -242,14 +242,14 @@ export default function Performance() {
               <tr>
                 <td style={{ fontWeight: 600 }}>Yield rebalancer</td>
                 <td style={{ color: 'var(--text-3)', fontSize: 13 }}>
-                  {perf.yield_rebalancer.rebalances} rebalances
+                  {perf.yield_rebalancer?.rebalances ?? 0} rebalances
                 </td>
                 <td className="mono"
-                  style={{ color: perf.yield_rebalancer.yield_gained_usd > 0 ? 'var(--green)' : 'var(--text-3)' }}>
-                  +${fmtn(perf.yield_rebalancer.yield_gained_usd)}
+                  style={{ color: (perf.yield_rebalancer?.yield_gained_usd ?? 0) > 0 ? 'var(--green)' : 'var(--text-3)' }}>
+                  +${fmtn(perf.yield_rebalancer?.yield_gained_usd ?? 0)}
                 </td>
                 <td>
-                  {perf.yield_rebalancer.rebalances > 0
+                  {(perf.yield_rebalancer?.rebalances ?? 0) > 0
                     ? <span className="tag tag-green">Active</span>
                     : <span className="tag" style={{ background:'var(--bg-3)', color:'var(--text-3)' }}>No moves yet</span>}
                 </td>
@@ -287,23 +287,23 @@ export default function Performance() {
                       {d.date}
                     </td>
                     <td className="mono"
-                      style={{ color: d.realized_pnl >= 0 ? 'var(--green)' : '#f87171' }}>
-                      {fmt(d.realized_pnl)}
+                      style={{ color: (d.realized_pnl ?? d.pnl ?? 0) >= 0 ? 'var(--green)' : '#f87171' }}>
+                      {fmt(d.realized_pnl ?? d.pnl ?? 0)}
                     </td>
                     <td className="mono" style={{ color: 'var(--green)' }}>
-                      {d.yield_earned > 0 ? `+${d.yield_earned.toFixed(4)}` : '—'}
+                      {(d.yield_earned ?? 0) > 0 ? `+${(d.yield_earned ?? 0).toFixed(4)}` : '—'}
                     </td>
                     <td className="mono" style={{ color: 'var(--text-3)' }}>
-                      {d.fees_paid > 0 ? d.fees_paid.toFixed(4) : '—'}
+                      {(d.fees_paid ?? 0) > 0 ? (d.fees_paid ?? 0).toFixed(4) : '—'}
                     </td>
                     <td className="mono"
                       style={{ fontWeight: 600,
-                        color: d.net > 0 ? 'var(--green)' : d.net < 0 ? '#f87171' : 'var(--text-3)' }}>
-                      {fmt(d.net)}
+                        color: (d.net ?? 0) > 0 ? 'var(--green)' : (d.net ?? 0) < 0 ? '#f87171' : 'var(--text-3)' }}>
+                      {fmt(d.net ?? 0)}
                     </td>
                     <td className="mono"
-                      style={{ color: d.cumulative >= 0 ? 'var(--green)' : '#f87171' }}>
-                      {fmt(d.cumulative)}
+                      style={{ color: (d.cumulative ?? 0) >= 0 ? 'var(--green)' : '#f87171' }}>
+                      {fmt(d.cumulative ?? 0)}
                     </td>
                     <td style={{ color: 'var(--text-3)' }}>{d.trades}</td>
                   </tr>
