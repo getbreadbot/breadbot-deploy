@@ -7,10 +7,10 @@ fetched from DEXScreener. Simulates a fixed exit strategy and reports
 per-trade and aggregate PnL.
 
 Exit rules (configurable via CLI):
-  Stop loss:   -20%  (exit immediately when hit)
+  Stop loss:   -12%  (configurable via --stop-loss)  (exit immediately when hit)
   Take profit: +50%  (sell 50% of position at TP1, hold rest)
-               +100% (sell remainder at TP2)
-  Max hold:    48 hours (market-sell at last known price if neither triggered)
+               +75%  (sell remainder at TP2)
+  Max hold:    6 hours  (configurable via --max-hold)
 
 Usage:
   python3 backtest.py                            # only actual buy decisions, last 30d
@@ -83,9 +83,11 @@ def _get_pool_address(chain: str, token_addr: str) -> str:
     return ""
 
 
+_max_hold_h = 48  # overridden by run_backtest()
+
 def fetch_candles(chain: str, token_addr: str, entry_ts: float) -> list:
     """
-    Fetch 15-min OHLCV candles from GeckoTerminal covering entry_ts through +48h.
+    Fetch 15-min OHLCV candles from GeckoTerminal covering entry_ts through +max_hold_h.
     Bar format from API: [timestamp_sec, open, high, low, close, volume] — descending order.
     Returns list of {"t","o","h","l","c"} dicts sorted ascending. Returns [] on failure.
     Retries once on 429 (rate limit) with a 5s back-off.
@@ -122,7 +124,7 @@ def fetch_candles(chain: str, token_addr: str, entry_ts: float) -> list:
                     print(f"    [warn] ohlcv HTTP {r.status_code}")
                     return []
                 bars = r.json()["data"]["attributes"]["ohlcv_list"]
-                cutoff = entry_ts + 48 * 3600
+                cutoff = entry_ts + _max_hold_h * 3600
                 result = []
                 for b in bars:
                     # [ts_sec, open, high, low, close, volume]
@@ -277,13 +279,18 @@ def run_backtest(
     mode:          str   = "actual",
     min_score:     int   = 70,
     days:          int   = 30,
-    stop_loss_pct: float = 0.20,
+    stop_loss_pct: float = 0.12,
     tp1_pct:       float = 0.50,
-    tp2_pct:       float = 1.00,
+    tp2_pct:       float = 0.75,
     portfolio_usd: float = 5000.0,
     as_json:       bool  = False,
     throttle_ms:   int   = 1200,
+    max_hold_hours: int  = 6,
+    max_h1_pump:   float = 150.0,
 ) -> dict:
+
+    global _max_hold_h
+    _max_hold_h = max_hold_hours
 
     alerts = load_alerts(mode, min_score, days)
     if not alerts:
@@ -316,6 +323,15 @@ def run_backtest(
                 entry_dt = entry_dt.replace(tzinfo=timezone.utc)
             entry_ts = entry_dt.timestamp()
         except Exception:
+            continue
+
+        # Filter out late entries by h1 pump flag
+        rug_flags_str = alert.get("rug_flags", "") or ""
+        import re as _re
+        _pump_match = _re.search(r'Already pumped \+(\d+)%', rug_flags_str)
+        if _pump_match and float(_pump_match.group(1)) > max_h1_pump:
+            no_data += 1
+            outcome_counts["filtered_h1_pump"] = outcome_counts.get("filtered_h1_pump", 0) + 1
             continue
 
         position_usd = calc_position(score, portfolio_usd)
@@ -378,6 +394,8 @@ def run_backtest(
         "min_score":      min_score,
         "days":           days,
         "stop_loss_pct":  stop_loss_pct,
+        "max_hold_hours": max_hold_hours,
+        "max_h1_pump":    max_h1_pump,
         "tp1_pct":        tp1_pct,
         "tp2_pct":        tp2_pct,
         "portfolio_usd":  portfolio_usd,
@@ -417,12 +435,16 @@ if __name__ == "__main__":
                         help="actual=buy decisions only, all=simulate every alert above min-score")
     parser.add_argument("--min-score",  type=int,   default=70)
     parser.add_argument("--days",       type=int,   default=30)
-    parser.add_argument("--stop-loss",  type=float, default=0.20)
+    parser.add_argument("--stop-loss",  type=float, default=0.12)
     parser.add_argument("--tp1",        type=float, default=0.50)
-    parser.add_argument("--tp2",        type=float, default=1.00)
+    parser.add_argument("--tp2",        type=float, default=0.75)
     parser.add_argument("--portfolio",  type=float, default=5000.0)
     parser.add_argument("--json",       action="store_true",
                         help="Machine-readable JSON output for panel integration")
+    parser.add_argument("--max-hold",   type=int,   default=6,
+                        help="Max hold time in hours (default 6)")
+    parser.add_argument("--max-h1-pump", type=float, default=150.0,
+                        help="Skip alerts where h1 pump exceeds this %% (default 150)")
     parser.add_argument("--throttle",   type=int,   default=2000,
                         help="Milliseconds between tokens (default 2000 — GeckoTerminal free tier)")
     args = parser.parse_args()
@@ -432,6 +454,8 @@ if __name__ == "__main__":
         min_score=args.min_score,
         days=args.days,
         stop_loss_pct=args.stop_loss,
+        max_hold_hours=args.max_hold,
+        max_h1_pump=args.max_h1_pump,
         tp1_pct=args.tp1,
         tp2_pct=args.tp2,
         portfolio_usd=args.portfolio,
