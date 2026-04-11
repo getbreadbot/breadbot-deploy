@@ -138,6 +138,7 @@ function AlertCard({ alert, onDecision }) {
 export default function Alerts() {
   const [alerts, setAlerts] = useState([])
   const [filter, setFilter] = useState('all') // pending | all
+  const [sortBy, setSortBy] = useState('time_desc') // field_direction
   const [loading, setLoading] = useState(true)
   const [connected, setConnected] = useState(false)
   const wsRef = useRef(null)
@@ -194,9 +195,22 @@ export default function Alerts() {
     ))
   }
 
-  const displayed = filter === 'pending'
+  const filtered = filter === 'pending'
     ? alerts.filter(a => !a.actioned && (!a.expires_at || Date.now() / 1000 < a.expires_at))
     : alerts
+
+  // Sort
+  const SORT_FNS = {
+    time_desc:  (a, b) => (b.timestamp ?? 0) - (a.timestamp ?? 0),
+    time_asc:   (a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0),
+    score_desc: (a, b) => (b.security_score ?? 0) - (a.security_score ?? 0),
+    score_asc:  (a, b) => (a.security_score ?? 0) - (b.security_score ?? 0),
+    liq_desc:   (a, b) => (b.liquidity_usd ?? 0) - (a.liquidity_usd ?? 0),
+    vol_desc:   (a, b) => (b.volume_24h ?? 0) - (a.volume_24h ?? 0),
+    mcap_desc:  (a, b) => (b.market_cap ?? 0) - (a.market_cap ?? 0),
+    price_desc: (a, b) => (b.price ?? 0) - (a.price ?? 0),
+  }
+  const displayed = [...filtered].sort(SORT_FNS[sortBy] || SORT_FNS.time_desc)
 
   const pendingCount = alerts.filter(a => !a.actioned && (!a.expires_at || Date.now() / 1000 < a.expires_at)).length
 
@@ -226,6 +240,23 @@ export default function Alerts() {
           >
             All
           </button>
+        </div>
+        <div style={{ display: 'flex', gap: 4, marginLeft: 16, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-3)', marginRight: 4 }}>Sort:</span>
+          {[
+            ['time_desc', 'Newest'],
+            ['score_desc', 'Score ↓'],
+            ['score_asc', 'Score ↑'],
+            ['liq_desc', 'Liquidity'],
+            ['vol_desc', 'Volume'],
+            ['mcap_desc', 'MCap'],
+          ].map(([key, label]) => (
+            <button key={key}
+              className={`btn btn-sm ${sortBy === key ? 'btn-amber' : 'btn-ghost'}`}
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              onClick={() => setSortBy(key)}
+            >{label}</button>
+          ))}
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
           <div className={`dot ${connected ? 'green' : 'red'}`} />

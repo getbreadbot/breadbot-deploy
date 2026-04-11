@@ -1624,7 +1624,28 @@ async def save_settings_basic_stub(): return {"saved": {}, "demo": True}
 @app.post("/api/settings/advanced")
 async def save_settings_advanced_stub(): return {"saved": False, "demo": True}
 @app.post("/api/bot/backtest/trigger")
-async def backtest_trigger_stub(): return {"status": "demo_mode"}
+async def backtest_trigger_stub():
+    """Run a real backtest on the VPS."""
+    import subprocess as _sp
+    script = Path(__file__).parent.parent / "backtest.py"
+    output = Path(__file__).parent.parent / "data" / "backtest_last.json"
+    log = Path("/tmp/backtest_demo.log")
+    venv_py = Path(__file__).parent.parent / "venv" / "bin" / "python3"
+    # Write wrapper that validates JSON before overwriting results
+    wrapper = Path("/tmp/backtest_demo_wrapper.sh")
+    wrapper.write_text(
+        f"#!/bin/bash\n"
+        f"{venv_py} -u {script} --mode all --min-score 83 --days 7 --json > {log} 2>&1\n"
+        f'LAST=$(tail -1 {log})\n'
+        f'echo "$LAST" | python3 -c "import json,sys; json.load(sys.stdin)" 2>/dev/null\n'
+        f'if [ $? -eq 0 ]; then echo "$LAST" > {output}; fi\n'
+    )
+    wrapper.chmod(0o755)
+    try:
+        proc = _sp.Popen(["bash", str(wrapper)], stdout=_sp.DEVNULL, stderr=_sp.DEVNULL)
+        return {"status": "launched", "pid": str(proc.pid), "mode": "all", "min_score": 83, "days": 7}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 @app.post("/api/bot/channels")
 async def add_channel_stub(): return {"ok": False, "demo": True}
 @app.post("/api/bot/grid/start")
