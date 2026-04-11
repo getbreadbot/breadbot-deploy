@@ -27,7 +27,7 @@ New .env vars:
     AXIOM_ENABLED=true               # master switch
     AXIOM_SESSION_COOKIE=            # httpOnly cookie from Chrome DevTools
     AXIOM_BOOST_ENABLED=true         # DEXScreener boosts (no auth needed)
-    AXIOM_BOOST_SCORE=4              # score addition for boosted tokens
+    AXIOM_BOOST_SCORE=8              # score addition for boosted tokens
     AXIOM_STREAM_SCORE=6             # score addition for Axiom stream tokens
     AXIOM_STREAM_WINDOW_MINUTES=30   # how long a stream hit stays valid
     AXIOM_POLL_INTERVAL_SECONDS=300  # how often to poll feeds (5 min)
@@ -131,7 +131,7 @@ def _cookie_is_expired(cookie_str: str) -> bool:
 _axiom_auth_alert_sent = 0  # Unix timestamp of last auth-expired Telegram alert
 _AXIOM_AUTH_ALERT_COOLDOWN = 1800  # send at most every 30 min
 AXIOM_BOOST_ENABLED    = os.getenv("AXIOM_BOOST_ENABLED", "true").lower() == "true"
-AXIOM_BOOST_SCORE      = int(os.getenv("AXIOM_BOOST_SCORE", "4"))
+AXIOM_BOOST_SCORE      = int(os.getenv("AXIOM_BOOST_SCORE", "8"))
 AXIOM_STREAM_SCORE     = int(os.getenv("AXIOM_STREAM_SCORE", "6"))
 AXIOM_STREAM_WINDOW    = int(os.getenv("AXIOM_STREAM_WINDOW_MINUTES", "30")) * 60
 AXIOM_POLL_INTERVAL    = int(os.getenv("AXIOM_POLL_INTERVAL_SECONDS", "300"))

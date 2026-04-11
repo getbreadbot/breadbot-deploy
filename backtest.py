@@ -175,6 +175,34 @@ def simulate_trade(
     if not candles:
         if current_price and current_price > 0:
             pnl_pct = (current_price - entry_price) / entry_price
+            # Apply stop loss even without candle data
+            if pnl_pct <= -stop_loss_pct:
+                return {
+                    "outcome":    "stop_loss",
+                    "pnl_usd":    round(position_usd * (-stop_loss_pct), 2),
+                    "pnl_pct":    round(-stop_loss_pct * 100, 1),
+                    "exit_price": round(entry_price * (1 - stop_loss_pct), 8),
+                    "bars_held":  0,
+                }
+            # Check TP levels
+            if pnl_pct >= tp2_pct:
+                mult = 0.5 * tp1_pct + 0.5 * tp2_pct
+                return {
+                    "outcome":    "tp2",
+                    "pnl_usd":    round(position_usd * mult, 2),
+                    "pnl_pct":    round(mult * 100, 1),
+                    "exit_price": round(entry_price * (1 + tp2_pct), 8),
+                    "bars_held":  0,
+                }
+            if pnl_pct >= tp1_pct:
+                mult = 0.5 * tp1_pct
+                return {
+                    "outcome":    "tp1_partial",
+                    "pnl_usd":    round(position_usd * mult, 2),
+                    "pnl_pct":    round(mult * 100, 1),
+                    "exit_price": current_price,
+                    "bars_held":  0,
+                }
             return {
                 "outcome":    "holding",
                 "pnl_usd":    round(position_usd * pnl_pct, 2),

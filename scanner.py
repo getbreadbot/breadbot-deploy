@@ -659,6 +659,13 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     elif h1_buys >= 50:
         score = min(100, score + 1); flags.append(f'+1 Buy velocity {h1_buys} txns (1h)')
 
+    # Velocity decay: if 5m buy rate is < 40% of h1 average, momentum is fading
+    if h1_buys >= 24:  # need at least ~2 buys/5min average to measure
+        h1_rate_per_5m = h1_buys / 12  # h1 has twelve 5-min windows
+        if m5_buys < h1_rate_per_5m * 0.4:
+            score = max(0, score - 6)
+            flags.append(f'Velocity decay: {m5_buys} vs {h1_rate_per_5m:.0f} avg/5m')
+
     # Social signals — Arkham + alpha channel boost
     social_boost, social_flags = await get_social_score_boost(token_addr, chain, client)
     if social_boost:
