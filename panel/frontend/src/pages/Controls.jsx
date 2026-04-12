@@ -58,11 +58,11 @@ export default function Controls() {
   }
 
   async function saveAutoExecute(val) {
-    const newSettings = { ...settings, AUTO_EXECUTE: val ? 'true' : 'false' }
+    const newSettings = { ...settings, AUTO_EXECUTE: val ? 'auto' : 'manual' }
     setSettings(newSettings)
     setSaving(true)
     try {
-      await post('/settings/basic', { settings: { AUTO_EXECUTE: val ? 'true' : 'false' } })
+      await post('/settings/basic', { settings: { AUTO_EXECUTE: val ? 'auto' : 'manual' } })
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
@@ -85,7 +85,7 @@ export default function Controls() {
   if (loading) return <div className="loading"><div className="spinner" />Loading controls...</div>
 
   const trading = status?.trading_active ?? false
-  const autoExecute = settings?.AUTO_EXECUTE === 'true'
+  const autoExecute = settings?.AUTO_EXECUTE === 'auto'
   const alertChannel = settings?.ALERT_CHANNEL || 'both'
 
   return (

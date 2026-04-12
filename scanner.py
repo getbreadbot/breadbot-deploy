@@ -156,6 +156,54 @@ def update_alert_decision(alert_id: int, decision: str) -> None:
         conn.close()
 
 
+def record_position(pair: dict, result, alert_id: int) -> int | None:
+    """Insert a new open position after successful auto-execution.
+    Returns the new position row id, or None on failure."""
+    try:
+        price     = float(pair.get("price_usd", 0))
+        cost      = result.position_usd
+        quantity  = cost / price if price > 0 else 0
+        chain     = pair.get("chain", "solana")
+        exchange  = "solana_dex" if chain == "solana" else "base_dex" if chain == "base" else "cex"
+        # Stop loss and take profit from backtest-tuned defaults
+        sl_pct    = float(os.getenv("BACKTEST_SL_PCT", "12")) / 100
+        tp25_pct  = 0.25
+        tp50_pct  = float(os.getenv("BACKTEST_TP2_PCT", "75")) / 100
+
+        conn = db_rw()
+        try:
+            cur = conn.execute(
+                """INSERT INTO positions
+                   (chain, token_addr, token_name, symbol, entry_price, quantity,
+                    cost_basis_usd, stop_loss_usd, take_profit_25, take_profit_50,
+                    status, exchange, opened_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))""",
+                (
+                    chain,
+                    pair.get("token_addr", ""),
+                    pair.get("token_name", pair.get("symbol", "UNKNOWN")),
+                    pair.get("symbol", "UNKNOWN"),
+                    price,
+                    quantity,
+                    cost,
+                    round(price * (1 - sl_pct), 10),
+                    round(price * (1 + tp25_pct), 10),
+                    round(price * (1 + tp50_pct), 10),
+                    "open",
+                    exchange,
+                ),
+            )
+            conn.commit()
+            pos_id = cur.lastrowid
+            log.info("  Recorded position id=%d %s cost=$%.2f", pos_id, pair.get("symbol"), cost)
+            return pos_id
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.error("record_position failed: %s", exc)
+        return None
+
+
 def db_get_config(key: str) -> str:
     """Read a single value from the bot_config table."""
     if not DB_PATH.exists():
@@ -749,6 +797,8 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
             keyboard = build_buy_keyboard(alert_id, position)
             await send_message(client, text, reply_markup=keyboard)
         else:
+            # Record the position in DB for tracking
+            record_position(pair, result, alert_id)
             msg = build_auto_buy_message(pair, score, flags, result)
             await send_message(client, msg)
     else:

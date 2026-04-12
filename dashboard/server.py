@@ -1600,13 +1600,26 @@ async def bot_pnl_history(days: int = 30):
 
 @app.get("/api/settings/basic")
 async def settings_basic():
+    # Read execution_mode from bot_config DB (source of truth)
+    exec_mode = "manual"
+    auto_strategy = "balanced"
+    db = get_db()
+    if db:
+        try:
+            em = db.execute("SELECT value FROM bot_config WHERE key='execution_mode'").fetchone()
+            if em: exec_mode = em["value"]
+            st = db.execute("SELECT value FROM bot_config WHERE key='auto_strategy'").fetchone()
+            if st: auto_strategy = st["value"]
+        except Exception: pass
+        finally: db.close()
     return {"MAX_POSITION_SIZE_PCT":os.environ.get("MAX_POSITION_SIZE_PCT","0.02"),
             "DAILY_LOSS_LIMIT_PCT":os.environ.get("DAILY_LOSS_LIMIT_PCT","0.05"),
             "MIN_LIQUIDITY_USD":os.environ.get("MIN_LIQUIDITY_USD","15000"),
             "MIN_VOLUME_24H_USD":os.environ.get("MIN_VOLUME_24H_USD","40000"),
             "AUTO_EXECUTE_MIN_SCORE":os.environ.get("AUTO_EXECUTE_MIN_SCORE","83"),
             "ALERT_CHANNEL":os.environ.get("ALERT_CHANNEL","solana"),
-            "AUTO_EXECUTE":os.environ.get("AUTO_EXECUTE","auto")}
+            "AUTO_EXECUTE":exec_mode,
+            "AUTO_STRATEGY":auto_strategy}
 
 @app.get("/api/settings/advanced")
 async def settings_advanced():

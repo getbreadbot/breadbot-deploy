@@ -118,6 +118,22 @@ async def _init_db() -> None:
 
 # ── Startup banner ────────────────────────────────────────────────────────────
 
+def _get_execution_mode() -> str:
+    """Read execution_mode from bot_config DB first, fall back to env."""
+    db_path = Path(__file__).parent / "data" / "cryptobot.db"
+    if db_path.exists():
+        try:
+            import sqlite3 as _sq
+            conn = _sq.connect(f"file:{db_path}?mode=ro", uri=True)
+            row = conn.execute("SELECT value FROM bot_config WHERE key='execution_mode'").fetchone()
+            conn.close()
+            if row and row[0]:
+                return row[0].strip()
+        except Exception:
+            pass
+    return os.getenv("EXECUTION_MODE", "manual")
+
+
 def _log_startup_config() -> None:
     """Log which engines are enabled so the operator can confirm config at a glance."""
     flags = {
@@ -128,7 +144,7 @@ def _log_startup_config() -> None:
         "Funding arb":          os.getenv("FUNDING_ARB_ENABLED",      "false"),
         "MEV protection (Jito)":      os.getenv("JITO_ENABLED",              "true"),
         "MEV protection (Flashbots)": os.getenv("FLASHBOTS_PROTECT_ENABLED", "true"),
-        "Auto-execute":         os.getenv("EXECUTION_MODE",           "manual"),
+        "Auto-execute":         _get_execution_mode(),
         "Alt data signals":     os.getenv("ALT_DATA_ENABLED",          "false"),
         "Coinalyze signals":    os.getenv("COINALYZE_ENABLED",  "false"),
         "Helius signals":       os.getenv("HELIUS_ENABLED",     "false"),

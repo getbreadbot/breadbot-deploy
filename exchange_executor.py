@@ -24,6 +24,20 @@ load_dotenv(Path(__file__).parent / ".env")
 
 log = logging.getLogger("exchange_executor")
 
+def _db_get_config(key: str) -> str:
+    """Read a value from bot_config table (DB-first, same as AutoExecutor)."""
+    db_path = Path(__file__).parent / "data" / "cryptobot.db"
+    if not db_path.exists():
+        return ""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        row = conn.execute("SELECT value FROM bot_config WHERE key=?", (key,)).fetchone()
+        conn.close()
+        return row[0].strip() if row and row[0] else ""
+    except Exception:
+        return ""
+
 # Lazy imports — connectors may not be fully configured on every deploy
 def _try_import(module_name: str):
     try:
@@ -55,7 +69,9 @@ def execute_trade(
         True if trade was submitted to the exchange successfully.
         False if execution was skipped, failed, or the connector is unconfigured.
     """
-    mode = os.getenv("EXECUTION_MODE", "manual").strip().lower()
+    # DB-first config read (matches AutoExecutor pattern)
+    mode = _db_get_config("execution_mode") or os.getenv("EXECUTION_MODE", "manual").strip().lower()
+    mode = mode.lower()
     if mode != "auto":
         log.debug("execute_trade called but EXECUTION_MODE=%s — skip", mode)
         return False
