@@ -579,12 +579,8 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     symbol     = pair.get("symbol", "UNKNOWN")
     chain      = pair["chain"]
 
-    # Hard dedup gate — catches any token that slipped through fetch_new_pairs
-    # (e.g. same tokenAddress appearing twice in a DEXScreener profiles payload)
-    if is_already_alerted(token_addr):
-        log.debug("  Dedup: skipping already-alerted %s (%s)", symbol, token_addr[:12])
-        return
-    # Reserve immediately so any duplicate in the pairs list is blocked.
+    # Dedup is handled by fetch_new_pairs() which adds to _seen_tokens before
+    # returning. Re-add here as a safety net (no-op if already present).
     _seen_tokens.add(token_addr)
 
     log.info("Processing %s (%s) %s...", symbol, chain, token_addr[:12])
