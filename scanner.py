@@ -166,7 +166,7 @@ def record_position(pair: dict, result, alert_id: int) -> int | None:
         chain     = pair.get("chain", "solana")
         exchange  = "solana_dex" if chain == "solana" else "base_dex" if chain == "base" else "cex"
         # Stop loss and take profit from backtest-tuned defaults
-        sl_pct    = float(os.getenv("BACKTEST_SL_PCT", "12")) / 100
+        sl_pct    = float(os.getenv("BACKTEST_SL_PCT", "8")) / 100
         tp25_pct  = 0.25
         tp50_pct  = float(os.getenv("BACKTEST_TP2_PCT", "75")) / 100
 

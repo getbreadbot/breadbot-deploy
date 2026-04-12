@@ -7,7 +7,7 @@ fetched from DEXScreener. Simulates a fixed exit strategy and reports
 per-trade and aggregate PnL.
 
 Exit rules (configurable via CLI):
-  Stop loss:   -12%  (configurable via --stop-loss)  (exit immediately when hit)
+  Stop loss:   -8%   (configurable via --stop-loss)  (exit immediately when hit)
   Take profit: +50%  (sell 50% of position at TP1, hold rest)
                +75%  (sell remainder at TP2)
   Max hold:    6 hours  (configurable via --max-hold)
@@ -307,7 +307,7 @@ def run_backtest(
     mode:          str   = "actual",
     min_score:     int   = 70,
     days:          int   = 30,
-    stop_loss_pct: float = 0.12,
+    stop_loss_pct: float = 0.08,
     tp1_pct:       float = 0.50,
     tp2_pct:       float = 0.75,
     portfolio_usd: float = 5000.0,
@@ -463,7 +463,7 @@ if __name__ == "__main__":
                         help="actual=buy decisions only, all=simulate every alert above min-score")
     parser.add_argument("--min-score",  type=int,   default=70)
     parser.add_argument("--days",       type=int,   default=30)
-    parser.add_argument("--stop-loss",  type=float, default=0.12)
+    parser.add_argument("--stop-loss",  type=float, default=0.08)
     parser.add_argument("--tp1",        type=float, default=0.50)
     parser.add_argument("--tp2",        type=float, default=0.75)
     parser.add_argument("--portfolio",  type=float, default=5000.0)
