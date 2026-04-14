@@ -152,11 +152,13 @@ def sign_and_send(tx_b64: str) -> str:
     secret_bytes = base58.b58decode(PRIVATE_KEY_B58)
     keypair = Keypair.from_bytes(secret_bytes)
 
-    # Deserialize, sign, re-serialize
+    # Deserialize, sign (solders 0.26+), re-serialize
     raw_tx = base64.b64decode(tx_b64)
     tx = VersionedTransaction.from_bytes(raw_tx)
-    tx.sign([keypair])
-    signed_tx_b64 = base64.b64encode(bytes(tx)).decode("utf-8")
+    msg = tx.message
+    sig = keypair.sign_message(bytes(msg))
+    signed_tx = VersionedTransaction.populate(msg, [sig])
+    signed_tx_b64 = base64.b64encode(bytes(signed_tx)).decode("utf-8")
 
     # Send via RPC
     rpc_payload = {
