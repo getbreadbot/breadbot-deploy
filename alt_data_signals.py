@@ -370,22 +370,9 @@ async def _fetch_helius(client: httpx.AsyncClient) -> list:
                 "value_shift": round(total - prev, 5) if prev is not None else None,
             })
             log.info("Helius SOL inflation: %.3f%% (epoch %s)", total * 100, epoch)
-        # Also fetch recent Jupiter swap activity as ecosystem proxy
-        if HELIUS_API_KEY:
-            r2 = await client.get(
-                f"{HELIUS_BASE_URL}/transactions",
-                params={"api-key": HELIUS_API_KEY, "type": "SWAP", "source": "JUPITER"},
-                timeout=10,
-            )
-            if r2.status_code == 200:
-                events = r2.json()
-                if isinstance(events, list):
-                    rows.append({
-                        "source": "helius", "signal_type": "activity",
-                        "market_id": "sol_swap_volume", "description": "Recent Jupiter swap count",
-                        "value": float(len(events)), "value_shift": None,
-                    })
-                    log.info("Helius Jupiter swaps (recent): %d", len(events))
+        # Jupiter swap activity call disabled — /v0/transactions requires
+        # an address param; without one it returns 400 every cycle.
+        # Re-enable when a proper Helius webhook or DAS endpoint is wired.
     except Exception as exc:
         log.warning("Helius fetch failed: %s", exc)
     return rows
