@@ -588,10 +588,7 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     # 1. Security check
     score, flags = await check_token_security(client, chain, token_addr)
 
-    # Perfect GoPlus score penalty — historically worst win-rate cohort (15%)
-    if score == 100:
-        score = 95
-        flags.append("-5 Perfect rug score (too clean — review)")
+    # S43: score=100 penalty removed — S42 backtest showed 29% WR (best cohort)
 
     # Alt data composite signal adjustment
     composite = get_cached_composite()
