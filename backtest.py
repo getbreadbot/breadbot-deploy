@@ -96,20 +96,13 @@ def fetch_candles(chain: str, token_addr: str, entry_ts: float) -> list:
     if not pool_addr:
         return []
 
-    # Brief pause between pool lookup and ohlcv call — GeckoTerminal's free tier
-    # throttles when two calls arrive in quick succession from the same IP.
-    time.sleep(1.0)
-
     network = _gecko_network(chain)
     url = (
         f"{GECKO_BASE}/networks/{network}/pools/{pool_addr}"
         f"/ohlcv/minute?aggregate=15&limit=200"
     )
-    # Pause between pool-lookup and candle fetch — both hit GeckoTerminal
-    # and back-to-back requests across many tokens trips the rate limiter.
+    # Single pause between pool lookup and candle fetch to respect rate limits
     time.sleep(1.5)
-    # Brief pause between pool lookup (above) and the ohlcv call to respect rate limits
-    time.sleep(2.0)
 
     for attempt in range(4):
         try:
@@ -162,6 +155,8 @@ def simulate_trade(
     tp1_pct:       float = 0.50,
     tp2_pct:       float = 1.00,
     current_price: float = 0.0,
+    sl_delay_bars: int   = 0,
+    sl_circuit_breaker_pct: float = 0.25,
 ) -> dict:
     """
     Simulate a trade using candle data.
@@ -216,6 +211,7 @@ def simulate_trade(
     sl_price  = entry_price * (1 - stop_loss_pct)
     tp1_price = entry_price * (1 + tp1_pct)
     tp2_price = entry_price * (1 + tp2_pct)
+    cb_price  = entry_price * (1 - sl_circuit_breaker_pct) if sl_delay_bars > 0 else sl_price
 
     remaining = position_usd
     realized  = 0.0
@@ -225,13 +221,17 @@ def simulate_trade(
         lo, hi = bar["l"], bar["h"]
 
         if not tp1_hit:
-            if lo <= sl_price:
-                loss = remaining * (-stop_loss_pct)
+            # Delayed SL: during first sl_delay_bars, only circuit breaker is active
+            _sl_on = (i >= sl_delay_bars)
+            _esl = sl_price if _sl_on else cb_price
+            _epct = stop_loss_pct if _sl_on else sl_circuit_breaker_pct
+            if lo <= _esl:
+                loss = remaining * (-_epct)
                 return {
                     "outcome":    "stop_loss",
                     "pnl_usd":    round(realized + loss, 2),
                     "pnl_pct":    round(((realized + loss) / position_usd) * 100, 1),
-                    "exit_price": round(sl_price, 8),
+                    "exit_price": round(_esl, 8),
                     "bars_held":  i + 1,
                 }
             if hi >= tp1_price:
@@ -240,13 +240,16 @@ def simulate_trade(
                 remaining -= half
                 tp1_hit   = True
         else:
-            if lo <= sl_price:
-                loss = remaining * (-stop_loss_pct)
+            _sl_on = (i >= sl_delay_bars)
+            _esl = sl_price if _sl_on else cb_price
+            _epct = stop_loss_pct if _sl_on else sl_circuit_breaker_pct
+            if lo <= _esl:
+                loss = remaining * (-_epct)
                 return {
                     "outcome":    "tp1_partial",
                     "pnl_usd":    round(realized + loss, 2),
                     "pnl_pct":    round(((realized + loss) / position_usd) * 100, 1),
-                    "exit_price": round(sl_price, 8),
+                    "exit_price": round(_esl, 8),
                     "bars_held":  i + 1,
                 }
             if hi >= tp2_price:
@@ -315,6 +318,8 @@ def run_backtest(
     throttle_ms:   int   = 1200,
     max_hold_hours: int  = 6,
     max_h1_pump:   float = 150.0,
+    sl_delay_bars: int   = 0,
+    sl_circuit_breaker_pct: float = 0.25,
 ) -> dict:
 
     global _max_hold_h
@@ -378,6 +383,8 @@ def run_backtest(
             tp1_pct=tp1_pct,
             tp2_pct=tp2_pct,
             current_price=current_price,
+            sl_delay_bars=sl_delay_bars,
+            sl_circuit_breaker_pct=sl_circuit_breaker_pct,
         )
 
         outcome = result["outcome"]
@@ -471,6 +478,10 @@ if __name__ == "__main__":
                         help="Machine-readable JSON output for panel integration")
     parser.add_argument("--max-hold",   type=int,   default=6,
                         help="Max hold time in hours (default 6)")
+    parser.add_argument("--sl-delay-bars", type=int, default=0,
+                        help="Delay SL by N bars; 1 bar=15min (default 0)")
+    parser.add_argument("--sl-circuit-breaker", type=float, default=0.25,
+                        help="Hard max loss during SL delay period (default 0.25)")
     parser.add_argument("--max-h1-pump", type=float, default=150.0,
                         help="Skip alerts where h1 pump exceeds this %% (default 150)")
     parser.add_argument("--throttle",   type=int,   default=2000,
@@ -484,6 +495,8 @@ if __name__ == "__main__":
         stop_loss_pct=args.stop_loss,
         max_hold_hours=args.max_hold,
         max_h1_pump=args.max_h1_pump,
+        sl_delay_bars=args.sl_delay_bars,
+        sl_circuit_breaker_pct=args.sl_circuit_breaker,
         tp1_pct=args.tp1,
         tp2_pct=args.tp2,
         portfolio_usd=args.portfolio,

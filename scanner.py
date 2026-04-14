@@ -727,6 +727,14 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
         score = min(100, score + axiom_boost)
         flags += axiom_flags
 
+    # Time-of-day filter — hours 04, 14, 17, 21 UTC have 0% historical WR
+    from datetime import datetime, timezone as _tz
+    _utc_hour = datetime.now(_tz.utc).hour
+    _dead_hours = {4, 14, 17, 21}
+    if _utc_hour in _dead_hours:
+        score = max(0, score - 10)
+        flags.append(f"Dead hour {_utc_hour:02d}:00 UTC (0% hist WR)")
+
     # Hard drop: score below minimum — don't alert at all
     if score < 50:
         log.info("  Dropped %s: score %d < 50", symbol, score)

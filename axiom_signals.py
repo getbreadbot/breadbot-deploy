@@ -186,6 +186,8 @@ async def _poll_dexscreener_boosts(client: httpx.AsyncClient) -> None:
 def get_boost_score(token_addr: str) -> tuple[int, list[str]]:
     """
     Check if a token is in the DEXScreener boost list.
+    High boosts (>= 50 pts) are penalized — backtest shows 8% WR (bots paying
+    for visibility, not organic attention). Lower boosts kept neutral.
     Returns (score_boost, flags).
     """
     if not AXIOM_BOOST_ENABLED or not _boost_cache:
@@ -193,8 +195,10 @@ def get_boost_score(token_addr: str) -> tuple[int, list[str]]:
 
     addr_lower = token_addr.lower()
     amt = _boost_cache.get(addr_lower, 0)
-    if amt > 0:
-        return AXIOM_BOOST_SCORE, [f"+{AXIOM_BOOST_SCORE} DEXScreener boosted ({amt} points)"]
+    if amt >= 50:
+        return -3, [f"-3 DEXScreener high-boost ({amt} pts — paid visibility)"]
+    elif amt > 0:
+        return 0, [f"DEXScreener boosted ({amt} pts — neutral)"]
     return 0, []
 
 
