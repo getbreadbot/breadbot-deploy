@@ -60,19 +60,42 @@ async def _get_solana_holder_count(token_addr: str) -> int | None:
                 json={
                     "jsonrpc": "2.0", "id": 1,
                     "method": "getTokenAccounts",
-                    "params": {"mint": token_addr, "limit": 1, "showZeroBalance": False},
+                    "params": {"mint": token_addr, "limit": 1000},
                 },
             )
             if r.status_code != 200:
                 return None
             data = r.json()
             result = data.get("result", {})
-            total = result.get("total")
-            if total is not None:
-                return int(total)
-            # Fallback: count token_accounts returned
+            # Helius "total" reflects page count, not global total.
+            # Use len(token_accounts) + check cursor for pagination.
             accounts = result.get("token_accounts", [])
-            return len(accounts) if accounts else None
+            if not accounts:
+                return 0
+            cursor = result.get("cursor")
+            count = len(accounts)
+            # If cursor exists, there are more pages — fetch up to 3 more
+            page = 0
+            while cursor and page < 3:
+                page += 1
+                r2 = await client.post(
+                    f"https://mainnet.helius-rpc.com/?api-key={key}",
+                    json={
+                        "jsonrpc": "2.0", "id": 1,
+                        "method": "getTokenAccounts",
+                        "params": {"mint": token_addr, "limit": 1000, "cursor": cursor},
+                    },
+                )
+                if r2.status_code != 200:
+                    break
+                r2_data = r2.json()
+                r2_result = r2_data.get("result", {})
+                r2_accounts = r2_result.get("token_accounts", [])
+                count += len(r2_accounts)
+                cursor = r2_result.get("cursor")
+                if not r2_accounts:
+                    break
+            return count
     except Exception as exc:
         log.debug("holder count fetch failed for %s: %s", token_addr[:12], exc)
         return None
