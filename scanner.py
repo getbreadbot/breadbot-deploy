@@ -39,6 +39,8 @@ from config import (
     TELEGRAM_CHAT_ID,
 )
 from auto_executor import AutoExecutor
+from pullback_monitor import maybe_pullback, is_enabled as pullback_enabled
+from holder_signal import get_holder_score
 from yield_rebalancer import handle_rebalance_command, handle_rebalance_callback
 from pendle_connector import handle_pendle_command
 from robinhood_connector import get_account as rh_get_account, get_crypto_positions as rh_get_positions
@@ -120,8 +122,8 @@ def log_alert_to_db(pair: dict, score: int, flags: list[str], decision: str) -> 
             INSERT INTO meme_alerts
               (chain, token_addr, token_name, symbol, price_usd,
                liquidity, volume_24h, mcap, rug_score, rug_flags,
-               alert_sent, decision, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+               alert_sent, decision, holder_count, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
             """,
             (
                 pair["chain"],
@@ -136,6 +138,7 @@ def log_alert_to_db(pair: dict, score: int, flags: list[str], decision: str) -> 
                 json.dumps(flags),
                 1,
                 decision,
+                pair.get("holder_count"),
             ),
         )
         conn.commit()
@@ -724,6 +727,12 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
         score = min(100, score + axiom_boost)
         flags += axiom_flags
 
+    # Holder count growth rate signal (Solana only via Helius)
+    holder_adj, holder_note = await get_holder_score(pair)
+    if holder_adj:
+        score = max(0, min(100, score + holder_adj))
+        flags.append(holder_note)
+
     # Time-of-day filter — hours 04, 14, 17, 21 UTC have 0% historical WR
     from datetime import datetime, timezone as _tz
     _utc_hour = datetime.now(_tz.utc).hour
@@ -780,33 +789,10 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
         return
 
     if result.executed:
-        # Attempt actual exchange execution
-        trade_ok = False
-        try:
-            from exchange_executor import execute_trade
-            trade_ok = execute_trade(
-                chain=pair["chain"],
-                token_addr=pair["token_addr"],
-                symbol=pair.get("symbol", "UNKNOWN"),
-                position_usd=result.position_usd,
-                price_usd=pair.get("price_usd", 0.0),
-            )
-        except Exception as exc:
-            log.error("exchange_executor import or call failed: %s", exc)
-
-        # Telegram notice — adjust message if execution failed
-        if not trade_ok:
-            # Execution failed — downgrade to manual approval so operator can act
-            update_alert_decision(alert_id, "pending")
-            text, position = build_approval_message(pair, score, flags, result)
-            text = f"[Auto-exec attempted but FAILED — manual approval needed]\n\n{text}"
-            keyboard = build_buy_keyboard(alert_id, position)
-            await send_message(client, text, reply_markup=keyboard)
-        else:
-            # Record the position in DB for tracking
-            record_position(pair, result, alert_id)
-            msg = build_auto_buy_message(pair, score, flags, result)
-            await send_message(client, msg)
+        # Route through pullback monitor if enabled, otherwise execute immediately
+        asyncio.create_task(
+            maybe_pullback(client, pair, result, alert_id, score, flags)
+        )
     else:
         text, position = build_approval_message(pair, score, flags, result)
         keyboard       = build_buy_keyboard(alert_id, position)
