@@ -224,9 +224,9 @@ def _execute_cex(symbol: str, position_usd: float) -> bool:
         log.info("_execute_cex: ROBINHOOD_ENABLED=false — skipping %s", symbol)
         return False
 
-    username = os.getenv("ROBINHOOD_USERNAME", "").strip()
-    if not username:
-        log.warning("ROBINHOOD_USERNAME not configured — skipping CEX execution for %s", symbol)
+    api_key = os.getenv("ROBINHOOD_API_KEY", "").strip()
+    if not api_key:
+        log.warning("ROBINHOOD_API_KEY not configured — skipping CEX execution for %s", symbol)
         return False
 
     try:

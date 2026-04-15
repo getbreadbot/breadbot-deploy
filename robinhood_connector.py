@@ -27,6 +27,7 @@ Headers: x-api-key, x-signature (base64), x-timestamp
 
 import base64
 import json
+import uuid
 import logging
 import os
 import time
@@ -52,11 +53,14 @@ BASE_URL = "https://trading.robinhood.com"
 # Use v2 for fee-tier orders (lower fees at volume), v1 as fallback
 ORDER_API_VERSION = "v1"  # switch to "v2" when ready for fee tiers
 
+# Reuse a single httpx client for connection pooling
+_HTTP_CLIENT = httpx.Client(timeout=15.0)
+
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
 
 def _get_signing_key() -> Optional[nacl.signing.SigningKey]:
-    """Load Ed25519 signing key from base64 seed."""
+    """Load Ed25519 signing key from base64 seed. Cached after first call."""
     if not ROBINHOOD_PRIVATE_SEED:
         return None
     try:
@@ -66,10 +70,13 @@ def _get_signing_key() -> Optional[nacl.signing.SigningKey]:
         log.error("robinhood: failed to load signing key: %s", exc)
         return None
 
+# Cache signing key at module load (avoids re-decoding on every request)
+_CACHED_SIGNING_KEY = _get_signing_key()
+
 
 def _sign_request(method: str, path: str, body: str = "") -> dict:
     """Build auth headers for a Robinhood API request."""
-    signing_key = _get_signing_key()
+    signing_key = _CACHED_SIGNING_KEY
     if not signing_key:
         raise RuntimeError("ROBINHOOD_PRIVATE_SEED not configured or invalid")
     timestamp = str(int(time.time()))
@@ -92,21 +99,20 @@ def _request(method: str, path: str, body: dict = None, timeout: float = 15.0) -
     headers = _sign_request(method, path, body_str)
     url = BASE_URL + path
     try:
-        with httpx.Client(timeout=timeout) as client:
-            if method.upper() == "GET":
-                resp = client.get(url, headers=headers)
-            elif method.upper() == "POST":
-                resp = client.post(url, headers=headers, content=body_str)
-            elif method.upper() == "DELETE":
-                resp = client.delete(url, headers=headers)
-            else:
-                return {"error": f"Unsupported method: {method}"}
-            if resp.status_code in (200, 201):
-                return resp.json() if resp.content else {}
-            else:
-                log.warning("robinhood API %s %s → %d: %s",
-                            method, path, resp.status_code, resp.text[:300])
-                return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:500]}
+        if method.upper() == "GET":
+            resp = _HTTP_CLIENT.get(url, headers=headers, timeout=timeout)
+        elif method.upper() == "POST":
+            resp = _HTTP_CLIENT.post(url, headers=headers, content=body_str, timeout=timeout)
+        elif method.upper() == "DELETE":
+            resp = _HTTP_CLIENT.delete(url, headers=headers, timeout=timeout)
+        else:
+            return {"error": f"Unsupported method: {method}"}
+        if resp.status_code in (200, 201):
+            return resp.json() if resp.content else {}
+        else:
+            log.warning("robinhood API %s %s → %d: %s",
+                        method, path, resp.status_code, resp.text[:300])
+            return {"error": f"HTTP {resp.status_code}", "detail": resp.text[:500]}
     except Exception as exc:
         log.error("robinhood API error: %s %s → %s", method, path, exc)
         return {"error": str(exc)}
@@ -193,32 +199,75 @@ def get_crypto_price(symbol: str) -> dict:
 def place_crypto_order(
     symbol: str,
     side: str,
-    amount_usd: float,
+    amount_usd: float = 0,
     order_type: str = "market",
     limit_price: Optional[float] = None,
+    quantity: Optional[float] = None,
 ) -> dict:
-    """Place a crypto order via the official Robinhood API."""
+    """Place a crypto order via the official Robinhood API.
+
+    For market BUY:  specify amount_usd — auto-converts to crypto qty via ask price.
+    For market SELL: specify quantity (crypto units to sell).
+    For limit orders: specify amount_usd + limit_price (auto-computes qty),
+                      or specify quantity + limit_price directly.
+
+    Robinhood market_order_config only supports asset_quantity (crypto qty),
+    NOT quote_amount.  We must convert USD → qty before sending.
+    """
     if not ROBINHOOD_ENABLED:
         return {"status": "disabled"}
     if side not in ("buy", "sell"):
         return {"status": "error", "message": f"Invalid side: {side}"}
-    if amount_usd <= 0:
-        return {"status": "error", "message": "amount_usd must be positive"}
+
     pair = f"{symbol.upper()}-USD"
     path = f"/api/{ORDER_API_VERSION}/crypto/trading/orders/"
-    order_body = {"symbol": pair, "side": side, "type": order_type}
+    order_body = {"client_order_id": str(uuid.uuid4()), "symbol": pair, "side": side, "type": order_type}
+
     if order_type == "market":
-        order_body["market_order_config"] = {"asset_quantity": str(amount_usd)}
+        if side == "buy":
+            if amount_usd <= 0:
+                return {"status": "error", "message": "amount_usd must be positive for buy"}
+            # Fetch current ask price to convert USD → crypto quantity
+            quote = get_crypto_price(symbol)
+            ask = quote.get("ask_price", 0)
+            if not ask:
+                return {"status": "error", "message": f"Could not get ask price for {symbol}"}
+            crypto_qty = amount_usd / ask
+            log.info("robinhood: market buy %s — $%.2f / $%.2f ask = %.8f qty",
+                     symbol, amount_usd, ask, crypto_qty)
+            order_body["market_order_config"] = {"asset_quantity": f"{crypto_qty:.8f}"}
+        else:  # sell
+            if quantity is None or quantity <= 0:
+                # Fallback: if amount_usd given for sell, convert via bid
+                if amount_usd > 0:
+                    quote = get_crypto_price(symbol)
+                    bid = quote.get("bid_price", 0)
+                    if not bid:
+                        return {"status": "error", "message": f"Could not get bid price for {symbol}"}
+                    quantity = amount_usd / bid
+                    log.info("robinhood: market sell %s — $%.2f / $%.2f bid = %.8f qty",
+                             symbol, amount_usd, bid, quantity)
+                else:
+                    return {"status": "error", "message": "quantity or amount_usd required for sell"}
+            order_body["market_order_config"] = {"asset_quantity": f"{quantity:.8f}"}
+
     elif order_type == "limit":
         if not limit_price:
             return {"status": "error", "message": "limit_price required for limit orders"}
-        qty = amount_usd / limit_price
+        if quantity is not None and quantity > 0:
+            crypto_qty = quantity
+        elif amount_usd > 0:
+            crypto_qty = amount_usd / limit_price
+        else:
+            return {"status": "error", "message": "amount_usd or quantity required for limit orders"}
         order_body["limit_order_config"] = {
-            "asset_quantity": str(qty),
-            "limit_price": str(limit_price),
+            "asset_quantity": f"{crypto_qty:.8f}",
+            "limit_price": f"{limit_price:.2f}",
+            "time_in_force": "gtc",
         }
     else:
         return {"status": "error", "message": f"Unknown order_type: {order_type}"}
+
     try:
         data = _request("POST", path, body=order_body)
         if "error" in data:
