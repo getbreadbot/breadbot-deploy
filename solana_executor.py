@@ -142,6 +142,7 @@ def sign_and_send(tx_b64: str) -> str:
     try:
         from solders.keypair import Keypair          # type: ignore
         from solders.transaction import VersionedTransaction  # type: ignore
+        from solders.message import to_bytes_versioned  # type: ignore
         import base58                                # type: ignore
     except ImportError as e:
         raise ImportError(
@@ -156,7 +157,7 @@ def sign_and_send(tx_b64: str) -> str:
     raw_tx = base64.b64decode(tx_b64)
     tx = VersionedTransaction.from_bytes(raw_tx)
     msg = tx.message
-    sig = keypair.sign_message(bytes(msg))
+    sig = keypair.sign_message(to_bytes_versioned(msg))
     signed_tx = VersionedTransaction.populate(msg, [sig])
     signed_tx_b64 = base64.b64encode(bytes(signed_tx)).decode("utf-8")
 
@@ -169,7 +170,7 @@ def sign_and_send(tx_b64: str) -> str:
             signed_tx_b64,
             {
                 "encoding":            "base64",
-                "skipPreflight":       False,
+                "skipPreflight":       JITO_ENABLED,  # Jito requires skipPreflight=True
                 "preflightCommitment": "confirmed",
                 "maxRetries":          3,
             },
@@ -180,11 +181,15 @@ def sign_and_send(tx_b64: str) -> str:
     if JITO_ENABLED:
         logger.info("Jito MEV protection active — routing via Block Engine")
     rpc_resp = requests.post(send_url, json=rpc_payload, timeout=30)
-    rpc_resp.raise_for_status()
+    if rpc_resp.status_code != 200:
+        logger.error(
+            "RPC/Jito HTTP %d: %s", rpc_resp.status_code, rpc_resp.text[:300]
+        )
+        rpc_resp.raise_for_status()
     result = rpc_resp.json()
 
     if "error" in result:
-        raise RuntimeError(f"RPC rejected transaction: {result[error]}")
+        raise RuntimeError(f"RPC rejected transaction: {result["error"]}")
 
     sig = result["result"]
     logger.info("Transaction sent: %s", sig)
