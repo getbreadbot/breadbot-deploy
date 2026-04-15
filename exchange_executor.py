@@ -8,7 +8,7 @@ This module only routes and logs.
 
 Execution routing:
   chain=solana  → solana_executor.sign_and_send() (Jupiter V6 + Jito MEV)
-  chain=base    → evm_executor.send_raw_transaction() (Uniswap V3 + Flashbots)
+  chain=base    → evm_executor.execute_swap() (Odos DEX aggregator)
   fallback      → coinbase_connector or kraken_connector market order
 
 All methods return bool. Any exception is caught, logged, and returns False.
@@ -144,57 +144,30 @@ def _execute_solana(token_addr: str, symbol: str, position_usd: float, price_usd
 
 
 def _execute_base(token_addr: str, symbol: str, position_usd: float, price_usd: float) -> bool:
-    """Execute via Uniswap V3 on Base. MEV-protected via Flashbots when FLASHBOTS_PROTECT_ENABLED=true."""
+    """Execute via Odos DEX aggregator on Base. Handles quote, approval, signing, and confirmation."""
     evm_exec = _try_import("evm_executor")
     if evm_exec is None:
         log.error("evm_executor unavailable — cannot execute Base trade for %s", symbol)
         return False
 
-    wallet = os.getenv("EVM_WALLET_ADDRESS", "").strip()
     private_key = os.getenv("EVM_WALLET_PRIVATE_KEY", "").strip()
-    if not wallet or not private_key:
-        log.warning(
-            "EVM_WALLET_ADDRESS or EVM_WALLET_PRIVATE_KEY not configured "
-            "— skipping Base execution for %s", symbol
-        )
+    if not private_key:
+        log.warning("EVM_WALLET_PRIVATE_KEY not configured — skipping Base execution for %s", symbol)
         return False
 
     try:
-        # Check ETH balance for gas
-        eth_balance = evm_exec.get_eth_balance("base")
-        if eth_balance < 0.0005:
-            log.warning("Insufficient ETH for gas (%.6f ETH) — skipping %s", eth_balance, symbol)
-            return False
-
         USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
         usdc_amount = int(position_usd * 1_000_000)  # USDC has 6 decimals
 
-        # Get quote
-        quote = evm_exec.get_quote("base", USDC_BASE, token_addr, usdc_amount)
-        if not quote or not quote.get("amount_out"):
-            log.warning("No valid quote for %s on Base — skipping", symbol)
+        result = evm_exec.execute_swap("base", USDC_BASE, token_addr, usdc_amount, private_key)
+
+        if result["success"]:
+            log.info("Base execution confirmed: %s $%.2f tx=%s out=%d",
+                     symbol, position_usd, result["tx_hash"], result["amount_out"])
+            return True
+        else:
+            log.warning("Base execution failed for %s: %s", symbol, result.get("error", "unknown"))
             return False
-
-        # Apply slippage to min output
-        slippage = int(os.getenv("EVM_MAX_SLIPPAGE_BPS", "50"))
-        min_out = int(quote["amount_out"] * (1 - slippage / 10000))
-
-        # Build swap tx (unsigned)
-        tx = evm_exec.build_swap_tx("base", USDC_BASE, token_addr, usdc_amount, min_out)
-
-        # Sign with private key
-        try:
-            from eth_account import Account  # type: ignore
-            signed = Account.sign_transaction(tx, private_key)
-            signed_hex = signed.rawTransaction.hex()
-        except ImportError:
-            log.error("eth-account not installed — cannot sign Base transaction")
-            return False
-
-        # Broadcast (routes through Flashbots Protect if enabled)
-        tx_hash = evm_exec.send_raw_transaction("base", signed_hex)
-        log.info("Base execution submitted: %s $%.2f tx=%s", symbol, position_usd, tx_hash)
-        return True
 
     except Exception as exc:
         log.error("Base execution failed for %s: %s", symbol, exc)

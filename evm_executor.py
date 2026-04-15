@@ -1,19 +1,18 @@
 """
-evm_executor.py — Phase 2B
-DEX execution on Base and Arbitrum via Uniswap V3 Router.
-Enables token swaps on EVM chains where Coinbase/Kraken have no listings.
+evm_executor.py — Base chain DEX execution via Odos aggregator.
 
-New .env vars required:
-  EVM_WALLET_ADDRESS    — Public address of the hot wallet (no private key in .env)
-  EVM_BASE_RPC_URL      — Alchemy/Infura RPC for Base mainnet
-  EVM_ARBITRUM_RPC_URL  — Alchemy/Infura RPC for Arbitrum mainnet
-  EVM_MAX_SLIPPAGE_BPS  — Max acceptable slippage in basis points (default 50 = 0.5%)
+Replaces the broken Uniswap V3 direct-call implementation.
+Uses Odos (https://api.odos.xyz) — free, no API key, aggregates across
+Uniswap V3, Aerodrome, and all major Base DEXes for best execution.
 
-Private key handling:
-  The EVM private key is NEVER written to .env.
-  Stored in Vaultwarden → Breadbot → "EVM Wallet Private Key".
-  Inject as EVM_WALLET_PRIVATE_KEY environment variable only when executing live swaps.
-  Read-only operations (quotes, balances) require no private key.
+Pattern mirrors solana_executor.py (Jupiter): quote → assemble → sign → send.
+
+Env vars:
+  EVM_WALLET_ADDRESS       — Public address of the hot wallet
+  EVM_WALLET_PRIVATE_KEY   — Private key (from Vaultwarden, injected at runtime)
+  EVM_BASE_RPC_URL         — Alchemy/Infura RPC for Base mainnet
+  EVM_ARBITRUM_RPC_URL     — Alchemy/Infura RPC for Arbitrum mainnet
+  EVM_MAX_SLIPPAGE_BPS     — Max slippage in basis points (default 100 = 1%)
 
 Dependencies: pip install web3 eth-account requests
 """
@@ -22,7 +21,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import requests
 from dotenv import load_dotenv
@@ -32,27 +31,29 @@ load_dotenv(Path(__file__).parent / ".env")
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-WALLET_ADDRESS   = os.getenv("EVM_WALLET_ADDRESS",   "").strip()
-BASE_RPC         = os.getenv("EVM_BASE_RPC_URL",      "").strip()
-ARBITRUM_RPC     = os.getenv("EVM_ARBITRUM_RPC_URL",  "").strip()
-MAX_SLIPPAGE_BPS = int(os.getenv("EVM_MAX_SLIPPAGE_BPS", "50"))
+WALLET_ADDRESS   = os.getenv("EVM_WALLET_ADDRESS", "").strip()
+BASE_RPC         = os.getenv("EVM_BASE_RPC_URL", "").strip()
+ARBITRUM_RPC     = os.getenv("EVM_ARBITRUM_RPC_URL", "").strip()
+MAX_SLIPPAGE_BPS = int(os.getenv("EVM_MAX_SLIPPAGE_BPS", "100"))
 
-# ── Flashbots MEV protection (Base only) ─────────────────────────────
-FLASHBOTS_PROTECT_ENABLED = os.getenv("FLASHBOTS_PROTECT_ENABLED", "false").lower() == "true"
-_FLASHBOTS_BASE_RPC       = "https://rpc.flashbots.net/fast"
+# ── Odos aggregator ───────────────────────────────────────────────────────────
+ODOS_QUOTE_URL    = "https://api.odos.xyz/sor/quote/v2"
+ODOS_ASSEMBLE_URL = "https://api.odos.xyz/sor/assemble"
 
+# Chain IDs
+_CHAIN_IDS = {"base": 8453, "arbitrum": 42161}
 
-# Uniswap V3 SwapRouter02 — same address on Base and Arbitrum
-_SWAP_ROUTER = "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45"
-
-_WETH = {
-    "base":     "0x4200000000000000000000000000000000000006",
-    "arbitrum": "0x82aF49447D8a07e3bd95BD0d56f35241523fBab1",
-}
+# Well-known tokens
+USDC_BASE     = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+USDC_ARBITRUM = "0xaf88d065e77c8cC2239327C5EDb3A432268e5831"
+NATIVE_ETH    = "0x0000000000000000000000000000000000000000"  # Odos uses zero-address for native
 
 Chain = Literal["base", "arbitrum"]
-_REQUEST_TIMEOUT = 10
+_REQUEST_TIMEOUT = 15
+_APPROVAL_GAS = 60_000  # ERC-20 approve is ~46k gas, pad for safety
 
+
+# ── RPC helpers ────────────────────────────────────────────────────────────────
 
 def _check_rpc(chain: Chain) -> str:
     rpc = BASE_RPC if chain == "base" else ARBITRUM_RPC
@@ -74,11 +75,29 @@ def _rpc_call(rpc_url: str, method: str, params: list) -> dict:
     return data["result"]
 
 
+def _get_nonce(chain: Chain) -> int:
+    rpc = _check_rpc(chain)
+    hex_nonce = _rpc_call(rpc, "eth_getTransactionCount", [WALLET_ADDRESS, "latest"])
+    return int(hex_nonce, 16)
+
+
+def _get_gas_price(chain: Chain) -> dict:
+    """Return maxFeePerGas and maxPriorityFeePerGas for EIP-1559 tx."""
+    rpc = _check_rpc(chain)
+    # Get base fee from latest block
+    block = _rpc_call(rpc, "eth_getBlockByNumber", ["latest", False])
+    base_fee = int(block["baseFeePerGas"], 16)
+    # Priority fee: 0.1 gwei on Base (very low), 0.01 gwei minimum
+    priority = max(100_000_000, base_fee // 10)  # 0.1 gwei or 10% of base
+    max_fee = base_fee * 2 + priority  # 2x base + priority for safety
+    return {"maxFeePerGas": max_fee, "maxPriorityFeePerGas": priority}
+
+
 # ── Balance checks ─────────────────────────────────────────────────────────────
 
 def get_eth_balance(chain: Chain, address: str | None = None) -> float:
-    """Return native ETH balance in ETH (float) for the wallet."""
-    rpc  = _check_rpc(chain)
+    """Return native ETH balance in ETH (float)."""
+    rpc = _check_rpc(chain)
     addr = address or WALLET_ADDRESS
     if not addr:
         raise RuntimeError("EVM_WALLET_ADDRESS not set in .env.")
@@ -89,188 +108,341 @@ def get_eth_balance(chain: Chain, address: str | None = None) -> float:
 
 
 def get_token_balance(chain: Chain, token_address: str, address: str | None = None) -> int:
-    """
-    Return raw ERC-20 token balance (token's smallest unit).
-    Divide by 10**decimals for human-readable amount.
-    """
-    rpc  = _check_rpc(chain)
+    """Return raw ERC-20 token balance (smallest unit)."""
+    rpc = _check_rpc(chain)
     addr = address or WALLET_ADDRESS
     if not addr:
         raise RuntimeError("EVM_WALLET_ADDRESS not set in .env.")
-    padded_addr = addr[2:].zfill(64)
-    call_data   = "0x70a08231" + padded_addr
-    hex_balance = _rpc_call(rpc, "eth_call", [{"to": token_address, "data": call_data}, "latest"])
+    padded_addr = addr[2:].lower().zfill(64)
+    call_data = "0x70a08231" + padded_addr
+    hex_balance = _rpc_call(rpc, "eth_call",
+                            [{"to": token_address, "data": call_data}, "latest"])
     balance = int(hex_balance, 16) if hex_balance and hex_balance != "0x" else 0
-    logger.info("Token %s balance on %s: %d (raw)", token_address[:8] + "...", chain, balance)
+    logger.info("Token %s balance on %s: %d (raw)", token_address[:10], chain, balance)
     return balance
 
 
-# ── Quotes ─────────────────────────────────────────────────────────────────────
-
-def get_quote(chain: Chain, token_in: str, token_out: str,
-              amount_in: int, fee_tier: int = 3000) -> dict:
-    """
-    Get an indicative swap quote using CoinGecko market prices.
-    Works from any server without API key. Accurate to ~0.1% for liquid pairs.
-
-    fee_tier: kept for API compatibility (500/3000/10000) but not used for pricing.
-    Returns: {amount_in, amount_out, price_impact, route, chain}
-
-    Note: The actual on-chain execution price is determined by the Uniswap V3 router
-    at swap time. This quote is used for pre-trade slippage validation only.
-    """
-    _COINGECKO_IDS = {
-        "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913": ("usd-coin",  6),   # USDC
-        "0x4200000000000000000000000000000000000006": ("ethereum",  18),  # WETH
-        "0x50c5725949a6f0c72e6c4a641f24049a917db0cb": ("dai",       18),  # DAI
-        "0xd9aaec86b65d86f6a7b5b1b0c42ffa531710b6ca": ("usd-coin",  6),   # USDbC
-        "0x82af49447d8a07e3bd95bd0d56f35241523fbab1": ("ethereum",  18),  # WETH Arbitrum
-        "0xaf88d065e77c8cc2239327c5edb3a432268e5831": ("usd-coin",  6),   # USDC Arbitrum
-    }
-
-    try:
-        tin  = token_in.lower()
-        tout = token_out.lower()
-
-        if tin not in _COINGECKO_IDS or tout not in _COINGECKO_IDS:
-            logger.warning("get_quote: token not in price map (%s or %s)", tin, tout)
-            return {"amount_in": amount_in, "amount_out": 0,
-                    "price_impact": None, "route": None, "chain": chain}
-
-        cg_in,  dec_in  = _COINGECKO_IDS[tin]
-        cg_out, dec_out = _COINGECKO_IDS[tout]
-
-        ids = ",".join({cg_in, cg_out})
-        resp = requests.get(
-            "https://api.coingecko.com/api/v3/simple/price",
-            params={"ids": ids, "vs_currencies": "usd"},
-            timeout=_REQUEST_TIMEOUT,
-        )
-        resp.raise_for_status()
-        prices = resp.json()
-
-        price_in  = prices.get(cg_in,  {}).get("usd", 0)
-        price_out = prices.get(cg_out, {}).get("usd", 0)
-
-        if not price_in or not price_out:
-            raise ValueError(f"Missing price: in={price_in} out={price_out}")
-
-        human_in  = amount_in / 10**dec_in
-        human_out = human_in * (price_in / price_out)
-        amount_out = int(human_out * 10**dec_out)
-
-        logger.info(
-            "Quote on %s: %g %s -> %g %s (via CoinGecko)",
-            chain, human_in, cg_in, human_out, cg_out,
-        )
-        return {
-            "amount_in":    amount_in,
-            "amount_out":   amount_out,
-            "price_impact": None,
-            "route":        "coingecko",
-            "chain":        chain,
-        }
-
-    except Exception as e:
-        logger.warning("get_quote failed (%s) -- quote unavailable", e)
-        return {"amount_in": amount_in, "amount_out": 0,
-                "price_impact": None, "route": None, "chain": chain}
-
-
-def check_slippage(quote: dict, min_amount_out: int) -> None:
-    """Raise if expected output is below the slippage-adjusted minimum."""
-    amount_out = quote.get("amount_out", 0)
-    if amount_out < min_amount_out:
-        raise ValueError(
-            f"Slippage check failed: expected >={min_amount_out} but quote returned {amount_out}. "
-            f"Max slippage: {MAX_SLIPPAGE_BPS} bps ({MAX_SLIPPAGE_BPS / 100:.2f}%)."
-        )
+def _get_allowance(chain: Chain, token: str, spender: str) -> int:
+    """Check ERC-20 allowance for spender."""
+    rpc = _check_rpc(chain)
+    owner_pad = WALLET_ADDRESS[2:].lower().zfill(64)
+    spender_pad = spender[2:].lower().zfill(64)
+    call_data = "0xdd62ed3e" + owner_pad + spender_pad  # allowance(owner, spender)
+    result = _rpc_call(rpc, "eth_call",
+                       [{"to": token, "data": call_data}, "latest"])
+    return int(result, 16) if result and result != "0x" else 0
 
 
 # ── Token approval ─────────────────────────────────────────────────────────────
 
-def build_approve_tx(chain: Chain, token_address: str, amount: int) -> dict:
+def _ensure_approval(chain: Chain, token: str, spender: str,
+                     amount: int, private_key: str) -> Optional[str]:
     """
-    Build an ERC-20 approve() transaction for the Uniswap SwapRouter.
-    Must be signed and sent by the caller (requires private key from Vaultwarden).
-    amount: use 2**256-1 for max approval.
+    Check allowance; if insufficient, send an approve(max) transaction.
+    Returns the approval tx hash if one was sent, else None.
     """
-    _check_rpc(chain)
-    padded_router = _SWAP_ROUTER[2:].zfill(64)
-    padded_amount = hex(amount)[2:].zfill(64)
-    call_data     = "0x095ea7b3" + padded_router + padded_amount
-    chain_id      = 8453 if chain == "base" else 42161
-    tx = {"from": WALLET_ADDRESS, "to": token_address, "data": call_data, "chainId": chain_id}
-    logger.info("Approve tx built: token=%s router=%s chain=%s",
-                token_address[:8] + "...", _SWAP_ROUTER[:8] + "...", chain)
+    from eth_account import Account
+
+    current = _get_allowance(chain, token, spender)
+    if current >= amount:
+        logger.info("Allowance sufficient (%d >= %d) for %s", current, amount, spender[:10])
+        return None
+
+    logger.info("Approving %s for spender %s on %s", token[:10], spender[:10], chain)
+    max_uint = 2**256 - 1
+    spender_pad = spender[2:].lower().zfill(64)
+    amount_pad = hex(max_uint)[2:].zfill(64)
+    call_data = "0x095ea7b3" + spender_pad + amount_pad
+
+    rpc = _check_rpc(chain)
+    nonce = _get_nonce(chain)
+    gas_prices = _get_gas_price(chain)
+    chain_id = _CHAIN_IDS[chain]
+
+    tx = {
+        "from": WALLET_ADDRESS,
+        "to": token,
+        "data": call_data,
+        "nonce": nonce,
+        "gas": _APPROVAL_GAS,
+        "maxFeePerGas": gas_prices["maxFeePerGas"],
+        "maxPriorityFeePerGas": gas_prices["maxPriorityFeePerGas"],
+        "chainId": chain_id,
+        "value": 0,
+        "type": 2,  # EIP-1559
+    }
+
+    signed = Account.sign_transaction(tx, private_key)
+    raw_hex = "0x" + signed.raw_transaction.hex()
+    tx_hash = _rpc_call(rpc, "eth_sendRawTransaction", [raw_hex])
+    logger.info("Approval tx sent: %s", tx_hash)
+
+    # Wait for confirmation (up to 30s)
+    for _ in range(15):
+        time.sleep(2)
+        try:
+            receipt = _rpc_call(rpc, "eth_getTransactionReceipt", [tx_hash])
+            if receipt and receipt.get("status") == "0x1":
+                logger.info("Approval confirmed in block %s",
+                            int(receipt["blockNumber"], 16))
+                return tx_hash
+            elif receipt and receipt.get("status") == "0x0":
+                raise RuntimeError(f"Approval tx reverted: {tx_hash}")
+        except RuntimeError as e:
+            if "error" in str(e).lower():
+                raise
+            continue  # receipt not yet available
+
+    raise RuntimeError(f"Approval tx not confirmed after 30s: {tx_hash}")
+
+
+# ── Odos quote ─────────────────────────────────────────────────────────────────
+
+def get_quote(chain: Chain, token_in: str, token_out: str,
+              amount_in: int, **kwargs) -> dict:
+    """
+    Get a swap quote from Odos aggregator.
+    Works with ANY token pair — not limited to a hardcoded list.
+
+    Returns: {amount_in, amount_out, price_impact, path_id, gas_estimate, chain}
+    """
+    chain_id = _CHAIN_IDS.get(chain)
+    if not chain_id:
+        raise ValueError(f"Unsupported chain: {chain}")
+
+    body = {
+        "chainId": chain_id,
+        "inputTokens": [{"tokenAddress": token_in, "amount": str(amount_in)}],
+        "outputTokens": [{"tokenAddress": token_out, "proportion": 1}],
+        "userAddr": WALLET_ADDRESS,
+        "slippageLimitPercent": MAX_SLIPPAGE_BPS / 100,  # Odos expects percentage
+        "referralCode": 0,
+        "disableRFQs": True,
+        "compact": True,
+    }
+
+    resp = requests.post(ODOS_QUOTE_URL, json=body, timeout=_REQUEST_TIMEOUT,
+                         headers={"Content-Type": "application/json"})
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "pathId" not in data:
+        logger.warning("Odos quote failed: %s", data.get("message", data))
+        return {"amount_in": amount_in, "amount_out": 0,
+                "price_impact": None, "path_id": None, "chain": chain}
+
+    # Extract output amount (Odos returns as outAmounts list)
+    out_amounts = data.get("outAmounts", [])
+    amount_out = int(out_amounts[0]) if out_amounts else 0
+
+    price_impact = data.get("percentDiff", None)
+    gas_estimate = data.get("gasEstimate", 0)
+    path_id = data["pathId"]
+
+    logger.info(
+        "Odos quote on %s: %s → %s | in=%d out=%d impact=%.2f%% gas=%d",
+        chain, token_in[:10], token_out[:10],
+        amount_in, amount_out,
+        float(price_impact) if price_impact else 0,
+        gas_estimate,
+    )
+
+    return {
+        "amount_in": amount_in,
+        "amount_out": amount_out,
+        "price_impact": price_impact,
+        "path_id": path_id,
+        "gas_estimate": gas_estimate,
+        "chain": chain,
+    }
+
+
+# ── Odos tx assembly ──────────────────────────────────────────────────────────
+
+def build_swap_tx(chain: Chain, token_in: str, token_out: str,
+                  amount_in: int, amount_out_minimum: int,
+                  path_id: Optional[str] = None, **kwargs) -> dict:
+    """
+    Assemble a swap transaction via Odos.
+    If path_id is provided (from get_quote), uses that route.
+    Otherwise, fetches a fresh quote first.
+
+    Returns a complete EIP-1559 transaction dict ready for eth_account.sign_transaction().
+    """
+    if not path_id:
+        # Get fresh quote
+        quote = get_quote(chain, token_in, token_out, amount_in)
+        path_id = quote.get("path_id")
+        if not path_id:
+            raise RuntimeError(
+                f"No Odos route available for {token_in[:10]}→{token_out[:10]} on {chain}"
+            )
+
+    body = {
+        "pathId": path_id,
+        "userAddr": WALLET_ADDRESS,
+        "simulate": False,
+    }
+
+    resp = requests.post(ODOS_ASSEMBLE_URL, json=body, timeout=_REQUEST_TIMEOUT,
+                         headers={"Content-Type": "application/json"})
+    resp.raise_for_status()
+    data = resp.json()
+
+    if "transaction" not in data:
+        raise RuntimeError(f"Odos assemble failed: {data.get('message', data)}")
+
+    odos_tx = data["transaction"]
+    chain_id = _CHAIN_IDS[chain]
+    nonce = _get_nonce(chain)
+    gas_prices = _get_gas_price(chain)
+
+    # Odos returns: to, data, value, gas (estimated)
+    gas_limit = int(odos_tx.get("gas", 300_000))
+    gas_limit = int(gas_limit * 1.2)  # 20% buffer
+
+    tx = {
+        "from": WALLET_ADDRESS,
+        "to": odos_tx["to"],
+        "data": odos_tx["data"],
+        "value": int(odos_tx.get("value", "0"), 16) if isinstance(odos_tx.get("value"), str) else int(odos_tx.get("value", 0)),
+        "nonce": nonce,
+        "gas": gas_limit,
+        "maxFeePerGas": gas_prices["maxFeePerGas"],
+        "maxPriorityFeePerGas": gas_prices["maxPriorityFeePerGas"],
+        "chainId": chain_id,
+        "type": 2,  # EIP-1559
+    }
+
+    # Store Odos router address for approval check
+    tx["_odos_router"] = odos_tx["to"]
+
+    logger.info(
+        "Swap tx assembled: %s→%s gas=%d nonce=%d chain=%s router=%s",
+        token_in[:10], token_out[:10], gas_limit, nonce, chain, odos_tx["to"][:10],
+    )
     return tx
 
 
-# ── Swap transaction builder ───────────────────────────────────────────────────
+# ── Transaction broadcast ─────────────────────────────────────────────────────
 
-def build_swap_tx(chain: Chain, token_in: str, token_out: str, amount_in: int,
-                  amount_out_minimum: int, fee_tier: int = 3000,
-                  deadline_seconds: int = 180) -> dict:
+def send_raw_transaction(chain: Chain, signed_tx_hex: str) -> str:
+    """Broadcast a signed raw transaction to the chain RPC."""
+    rpc = _check_rpc(chain)
+    if not signed_tx_hex.startswith("0x"):
+        signed_tx_hex = "0x" + signed_tx_hex
+    result = _rpc_call(rpc, "eth_sendRawTransaction", [signed_tx_hex])
+    tx_hash = result if isinstance(result, str) else str(result)
+    logger.info("Transaction broadcast on %s: %s", chain, tx_hash)
+    return tx_hash
+
+
+def confirm_tx(chain: Chain, tx_hash: str,
+               max_retries: int = 30, poll_seconds: float = 2.0) -> bool:
     """
-    Build a Uniswap V3 exactInputSingle swap transaction (unsigned).
-
-    Caller must:
-      1. call build_approve_tx() first if token_in is not ETH
-      2. sign with EVM private key (from Vaultwarden)
-      3. send via eth_sendRawTransaction
-
-    amount_out_minimum: apply slippage before passing (use check_slippage() to validate quote first).
+    Poll for transaction receipt. Returns True if status=0x1 (success).
     """
-    from eth_abi import encode  # type: ignore[import]
+    rpc = _check_rpc(chain)
+    for attempt in range(max_retries):
+        time.sleep(poll_seconds)
+        try:
+            receipt = _rpc_call(rpc, "eth_getTransactionReceipt", [tx_hash])
+            if receipt:
+                status = receipt.get("status", "0x0")
+                block = int(receipt.get("blockNumber", "0x0"), 16)
+                gas_used = int(receipt.get("gasUsed", "0x0"), 16)
+                if status == "0x1":
+                    logger.info("Tx confirmed: %s block=%d gas=%d", tx_hash, block, gas_used)
+                    return True
+                else:
+                    logger.error("Tx reverted: %s block=%d", tx_hash, block)
+                    return False
+        except RuntimeError:
+            continue
+    logger.warning("Tx not confirmed after %ds: %s", max_retries * poll_seconds, tx_hash)
+    return False
 
-    deadline   = int(time.time()) + deadline_seconds
-    chain_id   = 8453 if chain == "base" else 42161
-    params_enc = encode(
-        ["(address,address,uint24,address,uint256,uint256,uint160)"],
-        [(token_in, token_out, fee_tier, WALLET_ADDRESS, amount_in, amount_out_minimum, 0)],
-    ).hex()
-    call_data = "0x414bf389" + params_enc
-    tx = {"from": WALLET_ADDRESS, "to": _SWAP_ROUTER, "data": call_data, "chainId": chain_id}
-    logger.info("Swap tx built: %s→%s amtIn=%d minOut=%d chain=%s",
-                token_in[:8] + "...", token_out[:8] + "...", amount_in, amount_out_minimum, chain)
-    return tx
+
+# ── High-level execute ─────────────────────────────────────────────────────────
+
+def execute_swap(chain: Chain, token_in: str, token_out: str,
+                 amount_in: int, private_key: str) -> dict:
+    """
+    Complete swap execution: quote → approve → assemble → sign → send → confirm.
+
+    This is the preferred entry point — handles the full lifecycle.
+
+    Args:
+        chain:       "base" or "arbitrum"
+        token_in:    Input token address (e.g., USDC)
+        token_out:   Output token address (meme coin)
+        amount_in:   Amount in token_in's smallest unit (e.g., 1_000_000 = 1 USDC)
+        private_key: EVM wallet private key
+
+    Returns:
+        {"success": bool, "tx_hash": str, "amount_out": int, "error": str|None}
+    """
+    from eth_account import Account
+
+    try:
+        # 1. Check ETH for gas
+        eth_bal = get_eth_balance(chain)
+        if eth_bal < 0.0005:
+            return {"success": False, "tx_hash": None, "amount_out": 0,
+                    "error": f"Insufficient ETH for gas: {eth_bal:.6f}"}
+
+        # 2. Check token_in balance
+        token_bal = get_token_balance(chain, token_in)
+        if token_bal < amount_in:
+            return {"success": False, "tx_hash": None, "amount_out": 0,
+                    "error": f"Insufficient {token_in[:10]} balance: {token_bal} < {amount_in}"}
+
+        # 3. Get quote
+        quote = get_quote(chain, token_in, token_out, amount_in)
+        if not quote.get("path_id") or not quote.get("amount_out"):
+            return {"success": False, "tx_hash": None, "amount_out": 0,
+                    "error": f"No Odos route: {token_in[:10]}→{token_out[:10]}"}
+
+        amount_out = quote["amount_out"]
+        path_id = quote["path_id"]
+
+        # 4. Assemble tx
+        tx = build_swap_tx(chain, token_in, token_out, amount_in, 0, path_id=path_id)
+        odos_router = tx.pop("_odos_router", tx["to"])
+
+        # 5. Approve token_in for Odos router (if not native ETH)
+        if token_in.lower() != NATIVE_ETH.lower():
+            _ensure_approval(chain, token_in, odos_router, amount_in, private_key)
+            # Re-fetch nonce after approval (approval used one nonce)
+            tx["nonce"] = _get_nonce(chain)
+
+        # 6. Sign
+        signed = Account.sign_transaction(tx, private_key)
+        raw_hex = "0x" + signed.raw_transaction.hex()
+
+        # 7. Send
+        tx_hash = send_raw_transaction(chain, raw_hex)
+
+        # 8. Confirm
+        confirmed = confirm_tx(chain, tx_hash)
+        if not confirmed:
+            return {"success": False, "tx_hash": tx_hash, "amount_out": amount_out,
+                    "error": "Transaction not confirmed or reverted"}
+
+        logger.info("Swap complete: %s→%s amount_out=%d tx=%s",
+                    token_in[:10], token_out[:10], amount_out, tx_hash)
+        return {"success": True, "tx_hash": tx_hash, "amount_out": amount_out, "error": None}
+
+    except Exception as exc:
+        logger.error("execute_swap failed: %s", exc, exc_info=True)
+        return {"success": False, "tx_hash": None, "amount_out": 0, "error": str(exc)}
 
 
 # ── Self-test ──────────────────────────────────────────────────────────────────
 
-
-# ── Transaction broadcast ─────────────────────────────────────────────────────────────
-
-def send_raw_transaction(chain: Chain, signed_tx_hex: str) -> str:
-    """
-    Broadcast a signed raw transaction.
-    Routes through Flashbots Protect RPC on Base when FLASHBOTS_PROTECT_ENABLED=true,
-    preventing frontrunning at no extra cost. Falls back to standard RPC otherwise.
-    Arbitrum always uses the standard RPC (Flashbots Protect is Base/ETH only).
-
-    Args:
-        chain:          "base" or "arbitrum"
-        signed_tx_hex:  Hex-encoded signed transaction (0x-prefixed)
-
-    Returns:
-        Transaction hash string.
-
-    Raises:
-        RuntimeError on RPC error or missing config.
-    """
-    if chain == "base" and FLASHBOTS_PROTECT_ENABLED:
-        send_url = _FLASHBOTS_BASE_RPC
-        logger.info("Flashbots Protect RPC active — MEV protection enabled for Base tx")
-    else:
-        send_url = _check_rpc(chain)
-
-    result = _rpc_call(send_url, "eth_sendRawTransaction", [signed_tx_hex])
-    tx_hash = result if isinstance(result, str) else str(result)
-    logger.info("Transaction broadcast on %s: %s", chain, tx_hash)
-    return tx_hash
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
-    print(f"evm_executor self-test | slippage={MAX_SLIPPAGE_BPS} bps")
+    print(f"evm_executor self-test (Odos aggregator) | slippage={MAX_SLIPPAGE_BPS} bps")
     print(f"  EVM_WALLET_ADDRESS : {WALLET_ADDRESS or '(not set)'}")
     print(f"  BASE_RPC           : {'set' if BASE_RPC else '(not set)'}")
     print(f"  ARBITRUM_RPC       : {'set' if ARBITRUM_RPC else '(not set)'}")
@@ -278,26 +450,20 @@ if __name__ == "__main__":
     if BASE_RPC and WALLET_ADDRESS:
         try:
             bal = get_eth_balance("base")
-            print(f"Base ETH balance OK — {bal:.6f} ETH")
-            if bal < 0.002:
-                print("  WARN: Low ETH balance on Base — may be insufficient for gas")
+            print(f"  Base ETH balance   : {bal:.6f} ETH {'(LOW)' if bal < 0.002 else '(OK)'}")
         except Exception as e:
-            print(f"get_eth_balance (base) failed: {e}")
+            print(f"  get_eth_balance (base) failed: {e}")
+
+        usdc_bal = get_token_balance("base", USDC_BASE)
+        print(f"  Base USDC balance  : {usdc_bal / 1e6:.2f} USDC")
+
+        # Test quote: 1 USDC → WETH (should always work)
+        WETH_BASE = "0x4200000000000000000000000000000000000006"
+        try:
+            q = get_quote("base", USDC_BASE, WETH_BASE, 1_000_000)
+            print(f"  Odos quote 1 USDC→WETH: out={q['amount_out']} "
+                  f"impact={q.get('price_impact')}% path={q.get('path_id', 'none')[:16]}...")
+        except Exception as e:
+            print(f"  Odos quote failed: {e}")
     else:
-        print("EVM_BASE_RPC_URL or EVM_WALLET_ADDRESS not set — skipping balance check")
-
-    USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
-    WETH_BASE = _WETH["base"]
-    try:
-        quote = get_quote("base", USDC_BASE, WETH_BASE, 1_000_000)  # 1 USDC
-        print(f"Uniswap V3 quote on Base — 1 USDC → {quote['amount_out']} WETH raw "
-              f"(impact={quote.get('price_impact')}%)")
-    except Exception as e:
-        print(f"get_quote failed: {e}")
-
-    try:
-        dummy_quote = {"amount_out": 900}
-        check_slippage(dummy_quote, 1000)
-        print("WARN: slippage guard did not fire")
-    except ValueError as e:
-        print(f"Slippage guard OK — caught: {e}")
+        print("  EVM_BASE_RPC_URL or EVM_WALLET_ADDRESS not set — skipping tests")
