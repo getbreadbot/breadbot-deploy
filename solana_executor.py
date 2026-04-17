@@ -177,16 +177,35 @@ def sign_and_send(tx_b64: str) -> str:
         ],
     }
     # Route through Jito Block Engine (MEV protected) or standard RPC
-    send_url = JITO_ENDPOINT if JITO_ENABLED else RPC_URL
+    # If Jito returns 400 (e.g. "transaction #0 could not be decoded" — happens
+    # intermittently on larger multi-hop txs or during Jito-side glitches), fall
+    # back to the standard RPC so the trade still lands. We lose MEV protection
+    # on fallback but avoid missing the trade entirely.
+    result = None
+    used_jito = False
     if JITO_ENABLED:
+        used_jito = True
         logger.info("Jito MEV protection active — routing via Block Engine")
-    rpc_resp = requests.post(send_url, json=rpc_payload, timeout=30)
-    if rpc_resp.status_code != 200:
-        logger.error(
-            "RPC/Jito HTTP %d: %s", rpc_resp.status_code, rpc_resp.text[:300]
-        )
-        rpc_resp.raise_for_status()
-    result = rpc_resp.json()
+        rpc_resp = requests.post(JITO_ENDPOINT, json=rpc_payload, timeout=30)
+        if rpc_resp.status_code == 200:
+            result = rpc_resp.json()
+            if "error" in result:
+                logger.warning("Jito RPC error, falling back to standard RPC: %s", result.get("error"))
+                result = None
+                used_jito = False
+        else:
+            logger.warning(
+                "Jito HTTP %d (%s) — falling back to standard RPC",
+                rpc_resp.status_code, rpc_resp.text[:200]
+            )
+            used_jito = False
+    if result is None:
+        rpc_resp = requests.post(RPC_URL, json=rpc_payload, timeout=30)
+        if rpc_resp.status_code != 200:
+            logger.error("RPC HTTP %d: %s", rpc_resp.status_code, rpc_resp.text[:300])
+            rpc_resp.raise_for_status()
+        result = rpc_resp.json()
+    logger.info("Submitted via %s", "Jito" if used_jito else "standard RPC")
 
     if "error" in result:
         raise RuntimeError(f"RPC rejected transaction: {result["error"]}")
