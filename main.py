@@ -170,6 +170,14 @@ async def _run_yield_monitor() -> None:
         log.error("yield_monitor crashed: %s", exc, exc_info=True)
 
 
+async def _run_position_manager() -> None:
+    try:
+        from position_manager import position_manager_loop
+        await position_manager_loop()
+    except Exception as exc:
+        log.error("position_manager crashed: %s", exc, exc_info=True)
+
+
 async def _run_rebalancer() -> None:
     try:
         from yield_rebalancer import rebalancer_loop
@@ -298,6 +306,9 @@ async def main() -> None:
 
         # Yield monitor (always on — no side effects, pure read/log)
         tasks.append(asyncio.create_task(_run_yield_monitor(), name="yield_monitor"))
+
+        # Position manager (polls open positions, fires SL/TP exits)
+        tasks.append(asyncio.create_task(_run_position_manager(), name="position_manager"))
 
         # Rebalancer (opt-in)
         tasks.append(asyncio.create_task(_run_rebalancer(), name="yield_rebalancer"))
