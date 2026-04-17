@@ -43,6 +43,7 @@ log = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).parent / "data" / "cryptobot.db"
 USDC_MINT_SOLANA = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+USDC_ADDRESS_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 
 # In-memory tracker for which positions have taken their TP25 partial already.
 # Keyed by position id. Cleared when position closes.
@@ -104,7 +105,7 @@ def _fetch_price_usd(chain: str, token_addr: str) -> float | None:
         return None
 
 
-def _get_wallet_balance_raw(mint: str) -> int:
+def _get_solana_balance_raw(mint: str) -> int:
     """On-chain authoritative balance (raw integer) for the bot wallet's ATA of this mint."""
     rpc = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
     owner = os.getenv("SOLANA_WALLET_PUBKEY", "").strip()
@@ -163,6 +164,57 @@ def _sell_solana(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int)
         return False, 0.0
 
 
+def _get_base_balance_raw(token_address: str) -> int:
+    """On-chain authoritative balance (raw integer) for the bot's Base EVM wallet."""
+    try:
+        import evm_executor as ee
+        return int(ee.get_token_balance("base", token_address))
+    except Exception as exc:
+        log.debug("Base balance lookup failed for %s: %s", token_address, exc)
+        return 0
+
+
+def _sell_base(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -> tuple[bool, float]:
+    """
+    Execute a token->USDC sell via evm_executor on Base.
+    Returns (success, usdc_received_ui).
+
+    Note: evm_executor reads its own slippage from EVM_MAX_SLIPPAGE_BPS env var.
+    slippage_bps is accepted for signature parity with _sell_solana but not forwarded
+    (Odos quote flow handles slippage internally per its env setting).
+    """
+    try:
+        import evm_executor as ee
+    except ImportError as exc:
+        log.error("evm_executor not importable: %s", exc)
+        return False, 0.0
+
+    private_key = os.getenv("EVM_WALLET_PRIVATE_KEY", "").strip()
+    if not private_key:
+        log.error("EVM_WALLET_PRIVATE_KEY missing - cannot sell %s on Base", symbol)
+        return False, 0.0
+
+    try:
+        # Gas guard - Odos swaps on Base typically burn ~0.00004 ETH
+        eth = ee.get_eth_balance("base")
+        if eth < 0.0003:
+            log.warning("Insufficient ETH for gas on Base (%.6f) - cannot sell %s", eth, symbol)
+            return False, 0.0
+
+        result = ee.execute_swap("base", token_addr, USDC_ADDRESS_BASE, sell_raw, private_key)
+        if not result.get("success"):
+            log.warning("Base sell failed for %s: %s", symbol, result.get("error", "unknown"))
+            return False, 0.0
+
+        usdc_received = int(result.get("amount_out", 0)) / 1_000_000
+        log.info("Position exit (Base): %s tx=%s expected=$%.4f",
+                 symbol, result.get("tx_hash"), usdc_received)
+        return True, usdc_received
+    except Exception as exc:
+        log.error("Base sell failed for %s: %s", symbol, exc, exc_info=True)
+        return False, 0.0
+
+
 def _mark_closed(position_id: int, note: str = "") -> None:
     conn = _db_rw()
     try:
@@ -217,9 +269,9 @@ def _evaluate_position(row: dict) -> None:
     if now - last < _ACTION_COOLDOWN_SECONDS:
         return
 
-    # Base chain is not live-tested yet; skip to avoid surprises
-    if chain != "solana":
-        log.debug("Position #%d is %s chain — position_manager currently Solana-only", pid, chain)
+    # Chain dispatch - Solana and Base are live-tested (S49, S50).
+    if chain not in ("solana", "base"):
+        log.debug("Position #%d chain=%s unsupported by position_manager - skipping", pid, chain)
         return
 
     price = _fetch_price_usd(chain, token_addr)
@@ -249,7 +301,13 @@ def _evaluate_position(row: dict) -> None:
         return
 
     # Lookup authoritative on-chain balance (qty_db can diverge — memecoins with tax, etc.)
-    wallet_raw = _get_wallet_balance_raw(token_addr)
+    if chain == "solana":
+        wallet_raw = _get_solana_balance_raw(token_addr)
+    elif chain == "base":
+        wallet_raw = _get_base_balance_raw(token_addr)
+    else:
+        log.debug("Position #%d chain=%s has no balance lookup - skipping", pid, chain)
+        return
     if wallet_raw <= 0:
         log.warning(
             "Position #%d %s: %s triggered but wallet holds 0 of this mint — marking closed as dust",
@@ -270,7 +328,10 @@ def _evaluate_position(row: dict) -> None:
     )
 
     _last_action_ts[pid] = now
-    success, usdc_out = _sell_solana(token_addr, sell_raw, symbol, slippage)
+    if chain == "solana":
+        success, usdc_out = _sell_solana(token_addr, sell_raw, symbol, slippage)
+    else:  # base
+        success, usdc_out = _sell_base(token_addr, sell_raw, symbol, slippage)
 
     if not success:
         log.warning("Position #%d %s: %s sell did not confirm — will retry after cooldown", pid, symbol, action)
@@ -318,7 +379,7 @@ async def position_manager_loop() -> None:
         return
 
     interval = _cfg_int("POSITION_CHECK_INTERVAL_SECONDS", "60")
-    log.info("position_manager: starting (interval=%ds, solana-only)", interval)
+    log.info("position_manager: starting (interval=%ds, chains=solana+base)", interval)
 
     while True:
         try:
