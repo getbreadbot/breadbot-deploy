@@ -395,6 +395,85 @@ async def position_manager_loop() -> None:
 
 
 # ── Self-test (read-only, no execution) ───────────────────────────────────────
+# This block gets appended to position_manager.py just before the __main__ guard.
+
+def force_sell_position(position_id: int) -> dict:
+    '''
+    Force-sell 100% of a single open position by ID.
+
+    Returns:
+        {
+          'success': bool,
+          'position_id': int,
+          'symbol': str | None,
+          'chain': str | None,
+          'usdc_received': float,
+          'cost_basis': float,
+          'realized_pnl': float,
+          'error': str | None,
+        }
+    '''
+    positions = _load_open_positions()
+    match = next((p for p in positions if int(p['id']) == int(position_id)), None)
+
+    if match is None:
+        return {
+            'success': False,
+            'position_id': int(position_id),
+            'symbol': None,
+            'chain': None,
+            'usdc_received': 0.0,
+            'cost_basis': 0.0,
+            'realized_pnl': 0.0,
+            'error': f'position #{position_id} not found or not open',
+        }
+
+    chain = (match.get('chain') or '').lower()
+    symbol = match.get('symbol') or match.get('token_name') or '?'
+    token_addr = match.get('token_addr')
+    cost = float(match.get('cost_basis_usd') or 0)
+    slippage = _cfg_int('POSITION_MANAGER_SLIPPAGE_BPS', '150')
+
+    if chain == 'solana':
+        sell_raw = _get_solana_balance_raw(token_addr)
+        if sell_raw <= 0:
+            return {'success': False, 'position_id': int(position_id),
+                    'symbol': symbol, 'chain': chain, 'usdc_received': 0.0,
+                    'cost_basis': cost, 'realized_pnl': 0.0,
+                    'error': 'zero token balance on-chain'}
+        success, usdc_out = _sell_solana(token_addr, sell_raw, symbol, slippage)
+    elif chain == 'base':
+        sell_raw = _get_base_balance_raw(token_addr)
+        if sell_raw <= 0:
+            return {'success': False, 'position_id': int(position_id),
+                    'symbol': symbol, 'chain': chain, 'usdc_received': 0.0,
+                    'cost_basis': cost, 'realized_pnl': 0.0,
+                    'error': 'zero token balance on-chain'}
+        success, usdc_out = _sell_base(token_addr, sell_raw, symbol, slippage)
+    else:
+        return {'success': False, 'position_id': int(position_id),
+                'symbol': symbol, 'chain': chain, 'usdc_received': 0.0,
+                'cost_basis': cost, 'realized_pnl': 0.0,
+                'error': f'unsupported chain: {chain!r}'}
+
+    if not success:
+        return {'success': False, 'position_id': int(position_id),
+                'symbol': symbol, 'chain': chain, 'usdc_received': 0.0,
+                'cost_basis': cost, 'realized_pnl': 0.0,
+                'error': f'{chain} sell did not confirm'}
+
+    realized = float(usdc_out) - cost
+    _mark_closed(int(position_id), note='SELL_NOW')
+    return {
+        'success': True,
+        'position_id': int(position_id),
+        'symbol': symbol,
+        'chain': chain,
+        'usdc_received': float(usdc_out),
+        'cost_basis': cost,
+        'realized_pnl': realized,
+        'error': None,
+    }
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s  %(message)s")
     print("position_manager self-test — dry-run, no sells will execute")

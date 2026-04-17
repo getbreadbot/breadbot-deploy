@@ -914,6 +914,8 @@ async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
         await handle_channels_command(parts, send_message)
     elif cmd == "robinhood":
         await handle_robinhood_command(client)
+    elif cmd == "sell_now":
+        await handle_sell_now_command(client, args)
     elif cmd == "status":
         await handle_status_command(client)
 
@@ -978,6 +980,52 @@ async def handle_status_command(client: httpx.AsyncClient) -> None:
     await send_message(client, text)
 
 
+
+
+async def handle_sell_now_command(client: httpx.AsyncClient, args: str) -> None:
+    '''Handle /sell_now <position_id> — force-sell 100% of a single open position now.'''
+    arg = (args or '').strip().split()
+    if not arg:
+        usage = 'Usage: <code>/sell_now &lt;position_id&gt;</code>'
+        hint  = 'Use /positions (or the dashboard) to see open position IDs.'
+        await send_message(client, usage + chr(10) + hint)
+        return
+
+    try:
+        pos_id = int(arg[0])
+    except ValueError:
+        await send_message(client, 'Invalid position id: <code>' + arg[0] + '</code>. Must be an integer.')
+        return
+
+    await send_message(client, '🔧 /sell_now #' + str(pos_id) + ': loading position and preparing force-sell...')
+
+    try:
+        from position_manager import force_sell_position
+        result = await asyncio.to_thread(force_sell_position, pos_id)
+    except Exception as exc:
+        log.exception('sell_now raised')
+        await send_message(client, '❌ /sell_now #' + str(pos_id) + ' crashed: <code>' + str(exc) + '</code>')
+        return
+
+    if not result.get('success'):
+        err = result.get('error') or 'unknown'
+        await send_message(client, '❌ /sell_now #' + str(pos_id) + ' failed: ' + str(err))
+        return
+
+    symbol = result.get('symbol') or '?'
+    chain  = (result.get('chain') or '?').upper()
+    usdc   = float(result.get('usdc_received') or 0)
+    cost   = float(result.get('cost_basis') or 0)
+    pnl    = float(result.get('realized_pnl') or 0)
+    pct    = (pnl / cost * 100) if cost > 0 else 0.0
+
+    line1 = '✅ /sell_now exit — <b>' + str(symbol) + '</b> (#' + str(pos_id) + ') on ' + chain
+    line2 = 'received: <b>$' + format(usdc, '.4f') + '</b> USDC'
+    line3 = 'cost basis: $' + format(cost, '.4f')
+    line4 = 'realized P&amp;L: <b>$' + format(pnl, '+.4f') + '</b> (' + format(pct, '+.1f') + '%)'
+    await send_message(client, line1 + chr(10) + line2 + chr(10) + line3 + chr(10) + line4)
+    log.info('sell_now: closed position #%d (%s/%s) usdc=%.4f pnl=%+.4f',
+             pos_id, symbol, chain, usdc, pnl)
 # ── Main scan loop ────────────────────────────────────────────────────────────
 
 async def scan_loop(client: httpx.AsyncClient) -> None:
