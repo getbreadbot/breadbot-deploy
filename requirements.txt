@@ -42,6 +42,7 @@ pydantic==2.11.10              # Data validation
 pydantic-settings==2.10.1      # Settings management
 
 # Social / auth
+pynacl==1.6.0                  # Ed25519 signing for Robinhood Crypto Trading API auth
 tweepy==4.16.0                 # X (Twitter) API
 requests-oauthlib==2.0.0       # OAuth for social posting
 requests-toolbelt==1.0.0       # Multipart uploads
