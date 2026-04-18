@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS meme_alerts (
     token_addr TEXT NOT NULL, token_name TEXT, symbol TEXT,
     price_usd REAL, liquidity REAL, volume_24h REAL, mcap REAL,
     rug_score INTEGER, rug_flags TEXT, alert_sent INTEGER DEFAULT 0,
-    decision TEXT DEFAULT 'pending', created_at TEXT DEFAULT (datetime('now'))
+    decision TEXT DEFAULT 'pending', holder_count INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS positions (
     id INTEGER PRIMARY KEY AUTOINCREMENT, chain TEXT NOT NULL,

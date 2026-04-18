@@ -62,7 +62,8 @@ async def _init_db() -> None:
                 token_addr TEXT NOT NULL, token_name TEXT, symbol TEXT,
                 price_usd REAL, liquidity REAL, volume_24h REAL, mcap REAL,
                 rug_score INTEGER, rug_flags TEXT, alert_sent INTEGER DEFAULT 0,
-                decision TEXT DEFAULT 'pending', created_at TEXT DEFAULT (datetime('now'))
+                decision TEXT DEFAULT 'pending', holder_count INTEGER,
+                created_at TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, chain TEXT NOT NULL,
@@ -85,6 +86,8 @@ async def _init_db() -> None:
                 asset TEXT NOT NULL, apy REAL NOT NULL, tvl_usd REAL,
                 notes TEXT, recorded_at TEXT DEFAULT (datetime('now'))
             );
+            CREATE INDEX IF NOT EXISTS idx_yield_platform_asset_ts
+                ON yield_snapshots(platform, asset, recorded_at);
             CREATE TABLE IF NOT EXISTS daily_summary (
                 date TEXT PRIMARY KEY, realized_pnl REAL DEFAULT 0,
                 unrealized_pnl REAL DEFAULT 0, yield_earned REAL DEFAULT 0,
@@ -95,6 +98,20 @@ async def _init_db() -> None:
                 updated_at TEXT DEFAULT (datetime('now'))
             );
         """)
+
+        # Defensive migrations for DBs created before columns were added.
+        # Each migration is idempotent via try/except on "duplicate column" errors.
+        _migrations = [
+            ("meme_alerts", "holder_count", "INTEGER"),
+        ]
+        for table, col, coltype in _migrations:
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
+                log.info(f"Migrated: added {table}.{col}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise  # unexpected error, don't swallow
+
         conn.commit()
     finally:
         conn.close()
