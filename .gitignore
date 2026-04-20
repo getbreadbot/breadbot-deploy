@@ -14,3 +14,7 @@ node_modules/
 data/
 secrets/
 SESSION_STATE.json
+
+# Ad-hoc backup files from patch workflows
+*.bak*
+archive/
