@@ -122,21 +122,62 @@ def _execute_solana(token_addr: str, symbol: str, position_usd: float, price_usd
         # Convert USD to lamports: 1 USDC = 1_000_000 lamports (6 decimals)
         usdc_amount_lamports = int(position_usd * 1_000_000)
 
-        # Quote: USDC → target token
+        # S57 P0 fix: confirm_tx() returns a (confirmed, err_code) TUPLE,
+        # not a bool. The old `if confirmed:` test was always truthy on
+        # (False, "SLIPPAGE"), producing phantom position records for
+        # trades that failed on-chain.
+        #
+        # S57 P1: escalate slippage on Jupiter err 6001 (SLIPPAGE) for
+        # entry-side. Mirrors the sell-side schedule in position_manager
+        # (S55 P3). Non-SLIPPAGE errors fail fast — retrying a FAILED
+        # or TIMEOUT tx burns gas without changing the outcome.
+        base_bps = int(os.getenv("SOLANA_MAX_SLIPPAGE_BPS", "50"))
+        tiers = sorted({base_bps, 500, 1500, 3000})
+        tiers = [t for t in tiers if t >= base_bps and t <= 3000]
+        if not tiers:
+            # Operator set SOLANA_MAX_SLIPPAGE_BPS above 3000 — honor that
+            # rather than refusing to trade. Single attempt, no escalation.
+            tiers = [base_bps]
+
         USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-        quote = sol_exec.get_quote(USDC_MINT, token_addr, usdc_amount_lamports)
 
-        # Build and send
-        tx_b64 = sol_exec.build_swap_tx(quote)
-        sig = sol_exec.sign_and_send(tx_b64)
-        confirmed = sol_exec.confirm_tx(sig)
+        for idx, slippage_bps in enumerate(tiers):
+            quote = sol_exec.get_quote(
+                USDC_MINT, token_addr, usdc_amount_lamports,
+                slippage_bps=slippage_bps,
+            )
+            tx_b64 = sol_exec.build_swap_tx(quote)
+            sig = sol_exec.sign_and_send(tx_b64)
+            confirmed, err_code = sol_exec.confirm_tx(sig)
 
-        if confirmed:
-            log.info("Solana execution SUCCESS: %s $%.2f sig=%s", symbol, position_usd, sig)
-        else:
-            log.warning("Solana tx sent but not confirmed within timeout: %s sig=%s", symbol, sig)
+            if confirmed:
+                log.info(
+                    "Solana execution SUCCESS: %s $%.2f slippage=%dbps sig=%s",
+                    symbol, position_usd, slippage_bps, sig,
+                )
+                return True
 
-        return confirmed
+            # Only retry on SLIPPAGE; everything else fails fast.
+            if err_code != "SLIPPAGE":
+                log.warning(
+                    "Solana execution failed (%s): %s $%.2f sig=%s — no retry",
+                    err_code, symbol, position_usd, sig,
+                )
+                return False
+
+            if idx + 1 < len(tiers):
+                log.warning(
+                    "Solana entry %s slippage=%dbps failed — escalating to %dbps",
+                    symbol, slippage_bps, tiers[idx + 1],
+                )
+            else:
+                log.error(
+                    "Solana entry %s exhausted slippage tiers (last=%dbps sig=%s) — giving up",
+                    symbol, slippage_bps, sig,
+                )
+                return False
+
+        return False
 
     except Exception as exc:
         log.error("Solana execution failed for %s: %s", symbol, exc)
