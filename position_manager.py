@@ -257,7 +257,7 @@ def _sell_base(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -
         return False, 0.0, "EXCEPTION"
 
 
-def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = None) -> None:
+def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = None, exit_price: float | None = None) -> None:
     """Mark position closed and upsert realized_pnl into daily_summary atomically.
 
     S55 P0: daily_summary had no writer since mid-March, disabling the
@@ -267,8 +267,13 @@ def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = 
     conn = _db_rw()
     try:
         conn.execute(
-            "UPDATE positions SET status='closed', closed_at=datetime('now') WHERE id=?",
-            (position_id,),
+            """UPDATE positions
+                  SET status='closed',
+                      closed_at=datetime('now'),
+                      realized_pnl_usd = COALESCE(?, realized_pnl_usd),
+                      exit_price       = COALESCE(?, exit_price)
+                WHERE id=?""",
+            (realized_pnl, exit_price, position_id),
         )
         if realized_pnl is not None:
             today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -437,7 +442,7 @@ def _evaluate_position(row: dict) -> None:
         _partial_taken[pid] = True
         log.info("Position #%d %s: TP25 partial complete, position remains open for TP50/SL", pid, symbol)
     else:
-        _mark_closed(pid, note=action, realized_pnl=realized_pnl)
+        _mark_closed(pid, note=action, realized_pnl=realized_pnl, exit_price=price)
 
 
 def _load_open_positions() -> list[dict]:
@@ -546,7 +551,9 @@ def force_sell_position(position_id: int) -> dict:
                 'error': f'{chain} sell did not confirm'}
 
     realized = float(usdc_out) - cost
-    _mark_closed(int(position_id), note='SELL_NOW', realized_pnl=realized)
+    pos_qty = float(match.get('quantity') or 0)
+    sn_exit_price = (float(usdc_out) / pos_qty) if pos_qty > 0 else None
+    _mark_closed(int(position_id), note='SELL_NOW', realized_pnl=realized, exit_price=sn_exit_price)
     return {
         'success': True,
         'position_id': int(position_id),

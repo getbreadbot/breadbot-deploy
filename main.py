@@ -62,8 +62,7 @@ async def _init_db() -> None:
                 token_addr TEXT NOT NULL, token_name TEXT, symbol TEXT,
                 price_usd REAL, liquidity REAL, volume_24h REAL, mcap REAL,
                 rug_score INTEGER, rug_flags TEXT, alert_sent INTEGER DEFAULT 0,
-                decision TEXT DEFAULT 'pending', holder_count INTEGER,
-                created_at TEXT DEFAULT (datetime('now'))
+                decision TEXT DEFAULT 'pending', created_at TEXT DEFAULT (datetime('now'))
             );
             CREATE TABLE IF NOT EXISTS positions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, chain TEXT NOT NULL,
@@ -72,7 +71,8 @@ async def _init_db() -> None:
                 cost_basis_usd REAL NOT NULL, stop_loss_usd REAL,
                 take_profit_25 REAL, take_profit_50 REAL,
                 status TEXT DEFAULT 'open', exchange TEXT,
-                opened_at TEXT DEFAULT (datetime('now')), closed_at TEXT
+                opened_at TEXT DEFAULT (datetime('now')), closed_at TEXT,
+                realized_pnl_usd REAL, exit_price REAL
             );
             CREATE TABLE IF NOT EXISTS trades (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, position_id INTEGER,
@@ -86,8 +86,6 @@ async def _init_db() -> None:
                 asset TEXT NOT NULL, apy REAL NOT NULL, tvl_usd REAL,
                 notes TEXT, recorded_at TEXT DEFAULT (datetime('now'))
             );
-            CREATE INDEX IF NOT EXISTS idx_yield_platform_asset_ts
-                ON yield_snapshots(platform, asset, recorded_at);
             CREATE TABLE IF NOT EXISTS daily_summary (
                 date TEXT PRIMARY KEY, realized_pnl REAL DEFAULT 0,
                 unrealized_pnl REAL DEFAULT 0, yield_earned REAL DEFAULT 0,
@@ -99,18 +97,44 @@ async def _init_db() -> None:
             );
         """)
 
-        # Defensive migrations for DBs created before columns were added.
-        # Each migration is idempotent via try/except on "duplicate column" errors.
-        _migrations = [
-            ("meme_alerts", "holder_count", "INTEGER"),
-        ]
-        for table, col, coltype in _migrations:
-            try:
-                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {coltype}")
-                log.info(f"Migrated: added {table}.{col}")
-            except sqlite3.OperationalError as e:
-                if "duplicate column" not in str(e).lower():
-                    raise  # unexpected error, don't swallow
+        # ── S56 P3: defensive migration for legacy DBs that predate
+        # realized_pnl_usd / exit_price columns on positions. The CREATE
+        # TABLE above covers fresh installs; this covers upgrades.
+        def _col_exists(table, col):
+            rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+            return any(r[1] == col for r in rows)
+
+        if not _col_exists("positions", "realized_pnl_usd"):
+            conn.execute("ALTER TABLE positions ADD COLUMN realized_pnl_usd REAL")
+            log.info("migrated: added positions.realized_pnl_usd")
+        if not _col_exists("positions", "exit_price"):
+            conn.execute("ALTER TABLE positions ADD COLUMN exit_price REAL")
+            log.info("migrated: added positions.exit_price")
+
+        # trade_view: compat layer for legacy readers that target the trades table.
+        # Synthesizes buy/sell rows from positions. Idempotent (DROP + CREATE).
+        conn.execute("DROP VIEW IF EXISTS trade_view")
+        conn.execute("""
+            CREATE VIEW trade_view AS
+              SELECT
+                (p.id * 2 - 1)  AS id, p.id AS position_id,
+                'buy' AS action, p.entry_price AS price_usd,
+                p.quantity AS quantity, p.cost_basis_usd AS usd_value,
+                0.0 AS fee_usd, NULL AS pnl_usd, NULL AS tx_hash,
+                p.exchange AS exchange, p.opened_at AS executed_at
+              FROM positions p
+              UNION ALL
+              SELECT
+                (p.id * 2) AS id, p.id AS position_id,
+                'sell' AS action, p.exit_price AS price_usd,
+                p.quantity AS quantity,
+                CASE WHEN p.exit_price IS NOT NULL
+                     THEN p.exit_price * p.quantity ELSE NULL END AS usd_value,
+                0.0 AS fee_usd, p.realized_pnl_usd AS pnl_usd, NULL AS tx_hash,
+                p.exchange AS exchange, p.closed_at AS executed_at
+              FROM positions p
+              WHERE p.status='closed'
+        """)
 
         conn.commit()
     finally:
