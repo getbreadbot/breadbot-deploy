@@ -128,7 +128,7 @@ def _get_solana_balance_raw(mint: str) -> int:
         return 0
 
 
-def _sell_solana(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -> tuple[bool, float]:
+def _sell_solana(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -> tuple[bool, float, str | None]:
     """
     Execute a token→USDC sell via solana_executor.
     Returns (success, usdc_received_ui).
@@ -137,32 +137,33 @@ def _sell_solana(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int)
         import solana_executor as se
     except ImportError as exc:
         log.error("solana_executor not importable: %s", exc)
-        return False, 0.0
+        return False, 0.0, "IMPORT_ERROR"
 
     try:
         # Gas guard
         sol = se.check_sol_balance()
         if sol < 0.001:
             log.warning("Insufficient SOL for gas (%.6f) — cannot sell %s", sol, symbol)
-            return False, 0.0
+            return False, 0.0, "NO_GAS"
 
         quote = se.get_quote(token_addr, USDC_MINT_SOLANA, sell_raw, slippage_bps=slippage_bps)
         expected_usdc = int(quote.get("outAmount", 0)) / 1_000_000
         if expected_usdc <= 0:
             log.warning("Zero expected out for %s — aborting sell", symbol)
-            return False, 0.0
+            return False, 0.0, "ZERO_QUOTE"
 
         tx_b64 = se.build_swap_tx(quote)
         sig = se.sign_and_send(tx_b64)
-        log.info("Position exit: %s sig=%s expected=$%.4f", symbol, sig, expected_usdc)
-        confirmed = se.confirm_tx(sig, max_retries=20, poll_seconds=2.0)
+        log.info("Position exit: %s sig=%s expected=$%.4f (slippage=%dbps)",
+                 symbol, sig, expected_usdc, slippage_bps)
+        confirmed, err_code = se.confirm_tx(sig, max_retries=20, poll_seconds=2.0)
         if confirmed:
-            return True, expected_usdc
-        log.warning("Sell tx sent but not confirmed: %s sig=%s", symbol, sig)
-        return False, 0.0
+            return True, expected_usdc, None
+        log.warning("Sell tx sent but not confirmed (%s): %s sig=%s", err_code, symbol, sig)
+        return False, 0.0, err_code
     except Exception as exc:
         log.error("Sell failed for %s: %s", symbol, exc, exc_info=True)
-        return False, 0.0
+        return False, 0.0, "EXCEPTION"
 
 
 def _get_base_balance_raw(token_address: str) -> int:
@@ -175,7 +176,7 @@ def _get_base_balance_raw(token_address: str) -> int:
         return 0
 
 
-def _sell_base(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -> tuple[bool, float]:
+def _sell_base(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -> tuple[bool, float, str | None]:
     """
     Execute a token->USDC sell via evm_executor on Base.
     Returns (success, usdc_received_ui).
@@ -188,32 +189,32 @@ def _sell_base(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -
         import evm_executor as ee
     except ImportError as exc:
         log.error("evm_executor not importable: %s", exc)
-        return False, 0.0
+        return False, 0.0, "IMPORT_ERROR"
 
     private_key = os.getenv("EVM_WALLET_PRIVATE_KEY", "").strip()
     if not private_key:
         log.error("EVM_WALLET_PRIVATE_KEY missing - cannot sell %s on Base", symbol)
-        return False, 0.0
+        return False, 0.0, "NO_KEY"
 
     try:
         # Gas guard - Odos swaps on Base typically burn ~0.00004 ETH
         eth = ee.get_eth_balance("base")
         if eth < 0.0003:
             log.warning("Insufficient ETH for gas on Base (%.6f) - cannot sell %s", eth, symbol)
-            return False, 0.0
+            return False, 0.0, "NO_GAS"
 
         result = ee.execute_swap("base", token_addr, USDC_ADDRESS_BASE, sell_raw, private_key)
         if not result.get("success"):
             log.warning("Base sell failed for %s: %s", symbol, result.get("error", "unknown"))
-            return False, 0.0
+            return False, 0.0, "FAILED"
 
         usdc_received = int(result.get("amount_out", 0)) / 1_000_000
         log.info("Position exit (Base): %s tx=%s expected=$%.4f",
                  symbol, result.get("tx_hash"), usdc_received)
-        return True, usdc_received
+        return True, usdc_received, None
     except Exception as exc:
         log.error("Base sell failed for %s: %s", symbol, exc, exc_info=True)
-        return False, 0.0
+        return False, 0.0, "EXCEPTION"
 
 
 def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = None) -> None:
@@ -346,16 +347,40 @@ def _evaluate_position(row: dict) -> None:
     )
 
     _last_action_ts[pid] = now
-    if chain == "solana":
-        success, usdc_out = _sell_solana(token_addr, sell_raw, symbol, slippage)
-    else:  # base
-        success, usdc_out = _sell_base(token_addr, sell_raw, symbol, slippage)
+
+    # S55 P3: escalate slippage on SLIPPAGE error, retry immediately (no cooldown).
+    # Schedule: base (default 500=5%), 1500 (15%), 3000 (30%). Monotonically increasing.
+    # If operator sets POSITION_SELL_SLIPPAGE_BPS above a tier, that tier is skipped.
+    # Max cap at 3000bps — never escalate above 30% even if base > 3000.
+    slippage_schedule = sorted({s for s in (slippage, 1500, 3000) if s >= slippage})
+
+    success = False
+    usdc_out = 0.0
+    err_code: str | None = None
+    for i, try_slip in enumerate(slippage_schedule):
+        if chain == "solana":
+            success, usdc_out, err_code = _sell_solana(token_addr, sell_raw, symbol, try_slip)
+        else:  # base
+            success, usdc_out, err_code = _sell_base(token_addr, sell_raw, symbol, try_slip)
+
+        if success:
+            if i > 0:
+                log.info("Position #%d %s: %s succeeded on retry %d with slippage=%dbps",
+                         pid, symbol, action, i, try_slip)
+            break
+        # Only retry on SLIPPAGE — every other error falls through to cooldown.
+        if err_code != "SLIPPAGE":
+            break
+        log.warning("Position #%d %s: %s slippage=%dbps failed — escalating to next tier",
+                    pid, symbol, action, try_slip)
 
     if not success:
-        log.warning("Position #%d %s: %s sell did not confirm — will retry after cooldown", pid, symbol, action)
+        log.warning("Position #%d %s: %s sell did not confirm (err=%s, last_slippage=%dbps) — will retry after cooldown",
+                    pid, symbol, action, err_code, try_slip)
         _send_telegram(
             f"⚠️ Position Manager: {action} trigger failed for {symbol} (#{pid})\n"
             f"price=${price:.9f} entry=${entry:.9f} ({pct_vs_entry:+.1f}%)\n"
+            f"err={err_code} last_slippage={try_slip}bps\n"
             f"Will retry in {_ACTION_COOLDOWN_SECONDS}s. Inspect logs."
         )
         return
@@ -459,7 +484,7 @@ def force_sell_position(position_id: int) -> dict:
                     'symbol': symbol, 'chain': chain, 'usdc_received': 0.0,
                     'cost_basis': cost, 'realized_pnl': 0.0,
                     'error': 'zero token balance on-chain'}
-        success, usdc_out = _sell_solana(token_addr, sell_raw, symbol, slippage)
+        success, usdc_out, _err = _sell_solana(token_addr, sell_raw, symbol, slippage)
     elif chain == 'base':
         sell_raw = _get_base_balance_raw(token_addr)
         if sell_raw <= 0:
@@ -467,7 +492,7 @@ def force_sell_position(position_id: int) -> dict:
                     'symbol': symbol, 'chain': chain, 'usdc_received': 0.0,
                     'cost_basis': cost, 'realized_pnl': 0.0,
                     'error': 'zero token balance on-chain'}
-        success, usdc_out = _sell_base(token_addr, sell_raw, symbol, slippage)
+        success, usdc_out, _err = _sell_base(token_addr, sell_raw, symbol, slippage)
     else:
         return {'success': False, 'position_id': int(position_id),
                 'symbol': symbol, 'chain': chain, 'usdc_received': 0.0,

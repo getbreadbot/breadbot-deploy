@@ -215,7 +215,7 @@ def sign_and_send(tx_b64: str) -> str:
     return sig
 
 
-def confirm_tx(signature: str, max_retries: int = 15, poll_seconds: float = 2.0) -> bool:
+def confirm_tx(signature: str, max_retries: int = 15, poll_seconds: float = 2.0) -> tuple[bool, str | None]:
     """
     Poll the RPC until the transaction is confirmed or max_retries is exhausted.
 
@@ -225,7 +225,14 @@ def confirm_tx(signature: str, max_retries: int = 15, poll_seconds: float = 2.0)
         poll_seconds: Seconds between each poll.
 
     Returns:
-        True if confirmed, False if timed out or transaction failed.
+        (confirmed, err_code) tuple.
+          confirmed=True, err_code=None              -> success
+          confirmed=False, err_code="SLIPPAGE"       -> Jupiter slippage (Custom 6001)
+          confirmed=False, err_code="FAILED"         -> other on-chain program error
+          confirmed=False, err_code="TIMEOUT"        -> no confirmation within retries
+
+    S55 P3: err_code enables position_manager to retry slippage errors
+    immediately with escalated tolerance instead of serving the 120s cooldown.
     """
     import time
 
@@ -243,16 +250,26 @@ def confirm_tx(signature: str, max_retries: int = 15, poll_seconds: float = 2.0)
         if result is None:
             logger.debug("confirm_tx attempt %d/%d: not yet found", attempt, max_retries)
         elif result.get("err"):
-            logger.error("Transaction failed on-chain: %s", result["err"])
-            return False
+            err = result["err"]
+            # Detect Jupiter slippage error: {"InstructionError":[N,{"Custom":6001}]}
+            err_code = "FAILED"
+            try:
+                if isinstance(err, dict) and "InstructionError" in err:
+                    inner = err["InstructionError"][1]
+                    if isinstance(inner, dict) and inner.get("Custom") == 6001:
+                        err_code = "SLIPPAGE"
+            except (IndexError, KeyError, TypeError):
+                pass
+            logger.error("Transaction failed on-chain (%s): %s", err_code, err)
+            return False, err_code
         elif result.get("confirmationStatus") in ("confirmed", "finalized"):
             logger.info("Transaction confirmed: %s", signature)
-            return True
+            return True, None
 
         time.sleep(poll_seconds)
 
     logger.warning("confirm_tx timed out after %d attempts for %s", max_retries, signature)
-    return False
+    return False, "TIMEOUT"
 
 
 def check_sol_balance() -> float:
