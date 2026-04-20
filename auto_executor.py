@@ -54,10 +54,10 @@ except ImportError:
 
 STRATEGIES: dict[str, dict] = {
     "conservative": {
-        "min_score":        96,
+        "min_score":        99,
         "max_market_cap":   1_000_000,
         "position_multiplier": 0.5,
-        "description": "Score 96+, market cap under $1M, half position size",
+        "description": "Score 99+, market cap under $1M, half position size",
     },
     "balanced": {
         "min_score":        78,
