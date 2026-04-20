@@ -35,6 +35,7 @@ import logging
 import os
 import sqlite3
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import requests
@@ -215,19 +216,36 @@ def _sell_base(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -
         return False, 0.0
 
 
-def _mark_closed(position_id: int, note: str = "") -> None:
+def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = None) -> None:
+    """Mark position closed and upsert realized_pnl into daily_summary atomically.
+
+    S55 P0: daily_summary had no writer since mid-March, disabling the
+    daily loss circuit breaker. realized_pnl is written in the same
+    transaction as the positions UPDATE so they cannot drift.
+    """
     conn = _db_rw()
     try:
         conn.execute(
             "UPDATE positions SET status='closed', closed_at=datetime('now') WHERE id=?",
             (position_id,),
         )
+        if realized_pnl is not None:
+            today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            conn.execute(
+                """INSERT INTO daily_summary (date, realized_pnl, trades_count)
+                   VALUES (?, ?, 1)
+                   ON CONFLICT(date) DO UPDATE SET
+                       realized_pnl = realized_pnl + excluded.realized_pnl,
+                       trades_count = trades_count + 1""",
+                (today, float(realized_pnl)),
+            )
         conn.commit()
     finally:
         conn.close()
     _partial_taken.pop(position_id, None)
     _last_action_ts.pop(position_id, None)
-    log.info("Position #%d marked closed%s", position_id, f" ({note})" if note else "")
+    pnl_str = f" pnl=${realized_pnl:+.2f}" if realized_pnl is not None else ""
+    log.info("Position #%d marked closed%s%s", position_id, f" ({note})" if note else "", pnl_str)
 
 
 def _send_telegram(text: str) -> None:
@@ -313,7 +331,7 @@ def _evaluate_position(row: dict) -> None:
             "Position #%d %s: %s triggered but wallet holds 0 of this mint — marking closed as dust",
             pid, symbol, action,
         )
-        _mark_closed(pid, note=f"{action}, zero wallet balance")
+        _mark_closed(pid, note=f"{action}, zero wallet balance", realized_pnl=-cost)
         return
 
     sell_raw = int(wallet_raw * sell_fraction) if sell_fraction < 1.0 else wallet_raw
@@ -354,7 +372,7 @@ def _evaluate_position(row: dict) -> None:
         _partial_taken[pid] = True
         log.info("Position #%d %s: TP25 partial complete, position remains open for TP50/SL", pid, symbol)
     else:
-        _mark_closed(pid, note=action)
+        _mark_closed(pid, note=action, realized_pnl=realized_pnl)
 
 
 def _load_open_positions() -> list[dict]:
@@ -463,7 +481,7 @@ def force_sell_position(position_id: int) -> dict:
                 'error': f'{chain} sell did not confirm'}
 
     realized = float(usdc_out) - cost
-    _mark_closed(int(position_id), note='SELL_NOW')
+    _mark_closed(int(position_id), note='SELL_NOW', realized_pnl=realized)
     return {
         'success': True,
         'position_id': int(position_id),
