@@ -11,7 +11,7 @@ The daily loss limit and trading_paused flag are ALWAYS enforced,
 regardless of mode. These cannot be bypassed.
 
 Strategy presets:
-  conservative  — score >= 98 | market_cap < $1M  | 0.5x position size
+  conservative  — score >= 96 | market_cap < $1M  | 0.5x position size
   balanced      — score >= 78 | market_cap < $2M  | 1.0x position size (default)
   aggressive    — score >= 68 | market_cap < $5M  | 1.5x position size (capped at max)
 
@@ -54,10 +54,10 @@ except ImportError:
 
 STRATEGIES: dict[str, dict] = {
     "conservative": {
-        "min_score":        98,
+        "min_score":        96,
         "max_market_cap":   1_000_000,
         "position_multiplier": 0.5,
-        "description": "Score 98+, market cap under $1M, half position size",
+        "description": "Score 96+, market cap under $1M, half position size",
     },
     "balanced": {
         "min_score":        78,
