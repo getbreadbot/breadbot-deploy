@@ -74,13 +74,6 @@ async def _init_db() -> None:
                 opened_at TEXT DEFAULT (datetime('now')), closed_at TEXT,
                 realized_pnl_usd REAL, exit_price REAL
             );
-            CREATE TABLE IF NOT EXISTS trades (
-                id INTEGER PRIMARY KEY AUTOINCREMENT, position_id INTEGER,
-                action TEXT NOT NULL, price_usd REAL, quantity REAL,
-                usd_value REAL, fee_usd REAL DEFAULT 0, pnl_usd REAL,
-                tx_hash TEXT, exchange TEXT,
-                executed_at TEXT DEFAULT (datetime('now'))
-            );
             CREATE TABLE IF NOT EXISTS yield_snapshots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, platform TEXT NOT NULL,
                 asset TEXT NOT NULL, apy REAL NOT NULL, tvl_usd REAL,
@@ -97,6 +90,13 @@ async def _init_db() -> None:
             );
         """)
 
+        # ── S57 P3 Phase 4: the `trades` table is deprecated. Position buy/sell
+        # rows are synthesized from the positions table via the trade_view
+        # below; date aggregates come from daily_summary. Do not add trades
+        # back to _init_db without first removing both readers above.
+        # Existing DBs have `trades` renamed to `trades_archive` by a one-time
+        # migration below. Fresh installs never create it.
+
         # ── S56 P3: defensive migration for legacy DBs that predate
         # realized_pnl_usd / exit_price columns on positions. The CREATE
         # TABLE above covers fresh installs; this covers upgrades.
@@ -110,6 +110,20 @@ async def _init_db() -> None:
         if not _col_exists("positions", "exit_price"):
             conn.execute("ALTER TABLE positions ADD COLUMN exit_price REAL")
             log.info("migrated: added positions.exit_price")
+
+        # S57 P3 Phase 4: rename deprecated `trades` table to `trades_archive`
+        # on any existing DB. Idempotent — only renames if `trades` still
+        # exists as a table and `trades_archive` does not.
+        def _table_exists(name):
+            row = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+                (name,),
+            ).fetchone()
+            return row is not None
+
+        if _table_exists("trades") and not _table_exists("trades_archive"):
+            conn.execute("ALTER TABLE trades RENAME TO trades_archive")
+            log.info("migrated: trades -> trades_archive (S57 P3 Phase 4)")
 
         # trade_view: compat layer for legacy readers that target the trades table.
         # Synthesizes buy/sell rows from positions. Idempotent (DROP + CREATE).
