@@ -110,9 +110,13 @@ def api_status():
         return JSONResponse(empty)
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        pnl = conn.execute(
-            "SELECT COALESCE(SUM(pnl_usd),0) as p FROM trades WHERE date(executed_at)=?", (today,)
-        ).fetchone()["p"]
+        # S57 P3 Phase 2: read from daily_summary (authoritative date aggregate),
+        # not the deprecated trades table. Pre-S55-P0 closes have no row here,
+        # which is accurate — they predate the write hook.
+        pnl_row = conn.execute(
+            "SELECT COALESCE(realized_pnl,0) as p FROM daily_summary WHERE date=?", (today,)
+        ).fetchone()
+        pnl = pnl_row["p"] if pnl_row else 0.0
         open_pos = conn.execute(
             "SELECT COUNT(*) as c FROM positions WHERE status='open'"
         ).fetchone()["c"]
@@ -241,14 +245,19 @@ def api_trades():
     if not conn:
         return JSONResponse({"trades": [], "cumulative_pnl": []})
     try:
+        # S57 P3 Phase 2: trade_view synthesizes buy+sell rows from positions.
+        # Column parity with legacy trades: id, position_id, action, price_usd,
+        # quantity, usd_value, fee_usd, pnl_usd, tx_hash, exchange, executed_at.
         trades = conn.execute("""
-            SELECT t.*, p.symbol, p.chain FROM trades t
+            SELECT t.*, p.symbol, p.chain FROM trade_view t
             LEFT JOIN positions p ON t.position_id=p.id
             ORDER BY t.executed_at DESC
         """).fetchall()
+        # Cumulative P&L pulls from daily_summary (authoritative); pre-S55-P0
+        # closes are absent, accurately reflecting what was booked post-fix.
         pnl_rows = conn.execute("""
-            SELECT date(executed_at) as d, SUM(COALESCE(pnl_usd,0)) as dp
-            FROM trades GROUP BY date(executed_at) ORDER BY d ASC
+            SELECT date as d, COALESCE(realized_pnl,0) as dp
+            FROM daily_summary ORDER BY date ASC
         """).fetchall()
         cumulative = []
         total = 0.0
@@ -442,9 +451,19 @@ def api_stats():
         return JSONResponse({})
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        total_trades  = conn.execute("SELECT COUNT(*) as c FROM trades").fetchone()["c"]
-        win_trades    = conn.execute("SELECT COUNT(*) as c FROM trades WHERE pnl_usd>0").fetchone()["c"]
-        total_pnl     = conn.execute("SELECT COALESCE(SUM(pnl_usd),0) as s FROM trades").fetchone()["s"]
+        # S57 P3 Phase 2: counts from trade_view (sell rows = completed trades);
+        # P&L aggregates from daily_summary (authoritative date aggregate).
+        # win_rate filters pnl_usd>0 on sell rows — NULL pnl (pre-S55-P0 closes)
+        # is neither a win nor a loss and is excluded from the denominator.
+        total_trades  = conn.execute(
+            "SELECT COUNT(*) as c FROM trade_view WHERE action='sell' AND pnl_usd IS NOT NULL"
+        ).fetchone()["c"]
+        win_trades    = conn.execute(
+            "SELECT COUNT(*) as c FROM trade_view WHERE action='sell' AND pnl_usd>0"
+        ).fetchone()["c"]
+        total_pnl     = conn.execute(
+            "SELECT COALESCE(SUM(realized_pnl),0) as s FROM daily_summary"
+        ).fetchone()["s"]
         total_alerts  = conn.execute("SELECT COUNT(*) as c FROM meme_alerts").fetchone()["c"]
         buy_decisions = conn.execute("SELECT COUNT(*) as c FROM meme_alerts WHERE decision='buy'").fetchone()["c"]
         open_pos      = conn.execute("SELECT COUNT(*) as c FROM positions WHERE status='open'").fetchone()["c"]
@@ -882,13 +901,16 @@ def api_export_trades_csv():
     if not conn:
         return Response("No data", media_type="text/plain", status_code=404)
     try:
+        # S57 P3 Phase 2: trade_view has action='sell' for all closes; the view
+        # does not persist close reason (see docs/S56_P3_NOTES.md). The legacy
+        # filter IN ('sell','close','stop_loss','take_profit') collapses to sell.
         rows = conn.execute("""
             SELECT t.executed_at, p.symbol, p.chain, t.exchange, t.action,
                    t.quantity, t.price_usd, t.usd_value, p.cost_basis_usd, t.pnl_usd,
                    t.fee_usd, t.tx_hash
-            FROM trades t
+            FROM trade_view t
             LEFT JOIN positions p ON t.position_id = p.id
-            WHERE t.action IN ('sell', 'close', 'stop_loss', 'take_profit')
+            WHERE t.action = 'sell'
             ORDER BY t.executed_at ASC
         """).fetchall()
 
@@ -924,17 +946,20 @@ def api_analytics():
     if not conn:
         return JSONResponse({})
     try:
-        # Overall win rate
-        total = conn.execute("SELECT COUNT(*) as c FROM trades WHERE pnl_usd IS NOT NULL").fetchone()["c"]
-        wins = conn.execute("SELECT COUNT(*) as c FROM trades WHERE pnl_usd > 0").fetchone()["c"]
+        # S57 P3 Phase 2: analytics reads from trade_view (per-row with position
+        # joins). daily_summary is used for monthly P&L aggregation. win_rate
+        # denominators use pnl_usd IS NOT NULL to exclude pre-S55-P0 closes
+        # that weren't recorded with realized P&L.
+        total = conn.execute("SELECT COUNT(*) as c FROM trade_view WHERE action='sell' AND pnl_usd IS NOT NULL").fetchone()["c"]
+        wins = conn.execute("SELECT COUNT(*) as c FROM trade_view WHERE action='sell' AND pnl_usd > 0").fetchone()["c"]
         win_rate = round(wins / total * 100, 1) if total else 0
 
         # Win rate by chain
         chain_rows = conn.execute("""
             SELECT p.chain, COUNT(*) as total,
                    SUM(CASE WHEN t.pnl_usd > 0 THEN 1 ELSE 0 END) as wins
-            FROM trades t LEFT JOIN positions p ON t.position_id = p.id
-            WHERE t.pnl_usd IS NOT NULL AND p.chain IS NOT NULL
+            FROM trade_view t LEFT JOIN positions p ON t.position_id = p.id
+            WHERE t.action='sell' AND t.pnl_usd IS NOT NULL AND p.chain IS NOT NULL
             GROUP BY p.chain
         """).fetchall()
         win_by_chain = {}
@@ -951,10 +976,10 @@ def api_analytics():
                 END as band,
                 COUNT(*) as total,
                 SUM(CASE WHEN t.pnl_usd > 0 THEN 1 ELSE 0 END) as wins
-            FROM trades t
+            FROM trade_view t
             LEFT JOIN positions p ON t.position_id = p.id
             LEFT JOIN meme_alerts a ON p.token_addr = a.token_addr
-            WHERE t.pnl_usd IS NOT NULL AND a.rug_score IS NOT NULL
+            WHERE t.action='sell' AND t.pnl_usd IS NOT NULL AND a.rug_score IS NOT NULL
             GROUP BY band
         """).fetchall()
         win_by_score = {}
@@ -974,22 +999,24 @@ def api_analytics():
         best = conn.execute("""
             SELECT p.symbol, t.pnl_usd,
                    CASE WHEN t.usd_value > 0 THEN (t.pnl_usd / t.usd_value * 100) ELSE 0 END as pct_gain
-            FROM trades t LEFT JOIN positions p ON t.position_id = p.id
-            WHERE t.pnl_usd IS NOT NULL ORDER BY t.pnl_usd DESC LIMIT 1
+            FROM trade_view t LEFT JOIN positions p ON t.position_id = p.id
+            WHERE t.action='sell' AND t.pnl_usd IS NOT NULL ORDER BY t.pnl_usd DESC LIMIT 1
         """).fetchone()
         worst = conn.execute("""
             SELECT p.symbol, t.pnl_usd,
                    CASE WHEN t.usd_value > 0 THEN (t.pnl_usd / t.usd_value * 100) ELSE 0 END as pct_gain
-            FROM trades t LEFT JOIN positions p ON t.position_id = p.id
-            WHERE t.pnl_usd IS NOT NULL ORDER BY t.pnl_usd ASC LIMIT 1
+            FROM trade_view t LEFT JOIN positions p ON t.position_id = p.id
+            WHERE t.action='sell' AND t.pnl_usd IS NOT NULL ORDER BY t.pnl_usd ASC LIMIT 1
         """).fetchone()
 
         best_trade = {"symbol": best["symbol"] or "?", "pnl_usd": round(best["pnl_usd"], 2), "pct_gain": round(best["pct_gain"], 1)} if best and best["pnl_usd"] else None
         worst_trade = {"symbol": worst["symbol"] or "?", "pnl_usd": round(worst["pnl_usd"], 2), "pct_gain": round(worst["pct_gain"], 1)} if worst and worst["pnl_usd"] else None
 
-        # Max drawdown
+        # Max drawdown — iterate sell rows in chronological order
         pnl_series = conn.execute("""
-            SELECT pnl_usd FROM trades WHERE pnl_usd IS NOT NULL ORDER BY executed_at ASC
+            SELECT pnl_usd FROM trade_view
+            WHERE action='sell' AND pnl_usd IS NOT NULL
+            ORDER BY executed_at ASC
         """).fetchall()
         cumulative = 0
         peak = 0
@@ -1003,15 +1030,20 @@ def api_analytics():
                 max_dd = dd
 
         # Total fees
-        fees = conn.execute("SELECT COALESCE(SUM(fee_usd), 0) as s FROM trades").fetchone()["s"]
+        # S57 P3 Phase 2: trade_view doesn't carry fee data (fees were never
+        # reliably recorded on the legacy trades table either; buy/sell rows
+        # from positions don't split fees out). Hard-coded 0 until a proper
+        # fees source exists. See docs/S56_P3_NOTES.md.
+        fees = 0.0
 
         # Avg position size
         avg_pos = conn.execute("SELECT AVG(cost_basis_usd) as a FROM positions WHERE cost_basis_usd > 0").fetchone()["a"]
 
-        # Monthly PnL
+        # Monthly PnL — read authoritative daily_summary and roll up by month
         monthly_rows = conn.execute("""
-            SELECT strftime('%Y-%m', executed_at) as month, SUM(COALESCE(pnl_usd, 0)) as pnl
-            FROM trades GROUP BY month ORDER BY month ASC
+            SELECT strftime('%Y-%m', date) as month,
+                   COALESCE(SUM(realized_pnl), 0) as pnl
+            FROM daily_summary GROUP BY month ORDER BY month ASC
         """).fetchall()
         monthly_pnl = [{"month": r["month"], "pnl": round(r["pnl"], 2)} for r in monthly_rows]
 
@@ -1347,7 +1379,11 @@ async def bot_status():
         positions = c.execute("SELECT COUNT(*) as cnt FROM positions WHERE status='open'").fetchone()
         open_pos = positions["cnt"] if positions else 0
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        pnl_row = c.execute("SELECT COALESCE(SUM(pnl_usd),0) as pnl FROM trades WHERE DATE(executed_at)=? AND pnl_usd IS NOT NULL", (today,)).fetchone()
+        # S57 P3 Phase 2: read from daily_summary (authoritative date aggregate).
+        pnl_row = c.execute(
+            "SELECT COALESCE(realized_pnl,0) as pnl FROM daily_summary WHERE date=?",
+            (today,),
+        ).fetchone()
         total_pnl = round(pnl_row["pnl"], 2) if pnl_row else 0
         exec_mode = "manual"
         try:
@@ -1460,7 +1496,13 @@ async def bot_pnl():
     if not db: return {"total_pnl": 0, "trade_count": 0}
     try:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        row = db.execute("SELECT COALESCE(SUM(pnl_usd),0) as pnl, COUNT(*) as cnt FROM trades WHERE DATE(executed_at)=? AND pnl_usd IS NOT NULL", (today,)).fetchone()
+        # S57 P3 Phase 2: daily_summary is the authoritative date aggregate.
+        # trades_count replaces the old COUNT(*) FROM trades.
+        row = db.execute(
+            "SELECT COALESCE(realized_pnl,0) as pnl, COALESCE(trades_count,0) as cnt "
+            "FROM daily_summary WHERE date=?",
+            (today,),
+        ).fetchone()
         return {"total_pnl": round(row["pnl"],2) if row else 0, "realized_pnl_usd": round(row["pnl"],2) if row else 0, "trade_count": row["cnt"] if row else 0}
     finally: db.close()
 
@@ -1470,7 +1512,13 @@ async def bot_strategy_performance():
     if not db: return {"scanner":{"pnl":0,"trades":0},"grid":{"pnl":0,"cycles":0},"funding":{"pnl":0,"collected":0}}
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%d")
-        sr = db.execute("SELECT COALESCE(SUM(pnl_usd),0) as pnl, COUNT(*) as cnt FROM trades WHERE pnl_usd IS NOT NULL AND DATE(executed_at)>=?", (cutoff,)).fetchone()
+        # S57 P3 Phase 2: 30-day scanner P&L + trade count from daily_summary.
+        sr = db.execute(
+            "SELECT COALESCE(SUM(realized_pnl),0) as pnl, "
+            "       COALESCE(SUM(trades_count),0) as cnt "
+            "FROM daily_summary WHERE date>=?",
+            (cutoff,),
+        ).fetchone()
         grid_pnl, grid_cycles, fund_collected = 0, 0, 0
         try:
             gr = db.execute("SELECT COALESCE(SUM(profit_usd),0) as pnl, COUNT(*) as cnt FROM grid_fills WHERE DATE(filled_at)>=?", (cutoff,)).fetchone()
@@ -1587,7 +1635,14 @@ async def bot_pnl_history(days: int = 30):
     if not db: return []
     try:
         cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
-        rows = db.execute("SELECT DATE(executed_at) as date, COALESCE(SUM(pnl_usd),0) as pnl, COUNT(*) as trades FROM trades WHERE pnl_usd IS NOT NULL AND DATE(executed_at)>=? GROUP BY DATE(executed_at) ORDER BY DATE(executed_at)", (cutoff,)).fetchall()
+        # S57 P3 Phase 2: daily P&L history from daily_summary, which is the
+        # authoritative per-day aggregate and includes trades_count natively.
+        rows = db.execute(
+            "SELECT date, COALESCE(realized_pnl,0) as pnl, "
+            "       COALESCE(trades_count,0) as trades "
+            "FROM daily_summary WHERE date>=? ORDER BY date",
+            (cutoff,),
+        ).fetchall()
         result = []
         cumulative = 0
         for r in rows:
