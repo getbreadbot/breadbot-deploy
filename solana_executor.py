@@ -1,13 +1,32 @@
 """
-solana_executor.py — Phase 2A
-Jupiter V6 aggregator integration for Solana DEX execution.
+solana_executor.py — Jupiter V6 aggregator for Solana DEX execution
 No API key required. Quotes across every Solana DEX, executes at best price.
+Jito bundle submission for MEV protection.
 
-New .env vars required:
+.env vars required:
   SOLANA_WALLET_PUBKEY      — public key of the signing wallet
   SOLANA_PRIVATE_KEY        — base58-encoded private key (stored in Vaultwarden → Breadbot)
   SOLANA_RPC_URL            — Helius or QuickNode RPC endpoint
   SOLANA_MAX_SLIPPAGE_BPS   — max slippage in basis points (default 50 = 0.5%)
+
+──────────────────────────────────────────────────────────────────────────
+S55 P3 — confirm_tx error-code contract:
+──────────────────────────────────────────────────────────────────────────
+confirm_tx() returns (confirmed: bool, err_code: str | None):
+  (True,  None)        — tx confirmed/finalized successfully
+  (False, "SLIPPAGE")  — Jupiter program error Custom 6001 (slippage exceeded)
+                         position_manager uses this to retry immediately
+                         with escalated slippage (skip the 120s cooldown)
+  (False, "FAILED")    — other on-chain program error
+  (False, "TIMEOUT")   — no confirmation within max_retries polls
+
+The SLIPPAGE classification is load-bearing for position_manager's retry
+escalation. Do NOT collapse the return shape back to a plain bool without
+first removing the escalation path in position_manager._evaluate_position.
+
+Jupiter error code reference:
+  6001 = SlippageToleranceExceeded (documented at
+  https://github.com/jup-ag/jupiter-swap-api-client)
 """
 
 import os

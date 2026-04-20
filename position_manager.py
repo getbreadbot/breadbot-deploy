@@ -1,33 +1,73 @@
 """
-position_manager.py — Session 49
+position_manager.py — managed exits for open positions
 
 Polls open positions every POSITION_CHECK_INTERVAL_SECONDS (default 60) and
 exits them when stop-loss, take_profit_25, or take_profit_50 price levels
-are breached.
+are breached. Solana via Jupiter+Jito; Base via Odos (added S50+).
 
-Exit logic (Solana only for now — Base will follow once live-tested):
+Exit logic:
   - price <= stop_loss_usd     → SELL 100% (hard stop)
   - price >= take_profit_50    → SELL 100% of remaining (final exit)
   - price >= take_profit_25    → SELL 50% (partial exit, raises floor)
 
-Partial exits are tracked in-memory via the exit_stage field. Once a
-position has done its TP25 partial, only TP50 or SL can close the rest.
+Partial exits tracked in-memory via _partial_taken. Once a position has
+taken its TP25 partial, only TP50 or SL can close the rest.
 
+──────────────────────────────────────────────────────────────────────────
+S55 P0 — daily_summary write hook (critical):
+──────────────────────────────────────────────────────────────────────────
+_mark_closed() accepts realized_pnl and UPSERTs today's row in
+daily_summary in the same transaction as the positions UPDATE. This is
+what arms the auto_executor daily loss circuit breaker.
+
+Regression history: between mid-March and April 20, 2026 the write hook
+was absent while auto_executor._daily_loss_exceeded() kept reading the
+(stale) table. The cap was cosmetic. Do NOT remove the daily_summary
+UPSERT from _mark_closed without also removing the reader.
+
+All three close paths MUST pass realized_pnl:
+  - SL/TP via _evaluate_position        → realized_pnl = usdc_out - cost
+  - Zero-wallet dust close              → realized_pnl = -cost
+  - /sell_now manual close              → realized_pnl = usdc_out - cost
+
+──────────────────────────────────────────────────────────────────────────
+S55 P3 — dynamic slippage escalation on SL retry (critical):
+──────────────────────────────────────────────────────────────────────────
+When a sell fails with SLIPPAGE (Jupiter program error 6001, detected
+by solana_executor.confirm_tx), _evaluate_position retries IMMEDIATELY
+with the next tier in the schedule. Schedule:
+  sorted({POSITION_SELL_SLIPPAGE_BPS, 1500, 3000} where >= base)
+  default: [500, 1500, 3000]  (5%, 15%, 30%)
+
+Non-SLIPPAGE failures (TIMEOUT, FAILED, NO_GAS, etc.) still serve the
+120s _ACTION_COOLDOWN_SECONDS — retrying with more slippage wouldn't
+help those, and hammering a failing RPC is counterproductive.
+
+Regression history: S54 vibetrading dumped -36% → -76% in the 2 min
+cooldown window after a slippage-rejected SL tx. ~$12 extra loss.
+Do NOT collapse this back to "treat all errors the same" — the err_code
+dispatch is load-bearing.
+
+──────────────────────────────────────────────────────────────────────────
 Env vars:
   POSITION_MANAGER_ENABLED         default "true"
   POSITION_CHECK_INTERVAL_SECONDS  default "60"
-  POSITION_SELL_SLIPPAGE_BPS       default "500" (5% — memecoins need room)
+  POSITION_SELL_SLIPPAGE_BPS       default "500" (base of the escalation schedule)
   POSITION_TP25_SELL_FRACTION      default "0.5"
 
 Telegram:
   /sell_now <position_id>          force-sell a position immediately (100%)
+                                   NOTE: sell_now does NOT use the retry
+                                   escalation — it runs a single attempt
+                                   at the configured slippage.
 
 Database:
   Reads  positions WHERE status='open'
-  Writes positions.status = 'closed' on full exit, 'open_partial' on TP25 partial
+  Writes positions.status (closed / open_partial)
+         daily_summary   UPSERT today's realized_pnl + trades_count
 
-The module uses solana_executor directly — same path proven in Session 49
-with the M2M manual sell (tx 2RopfgiSF1sP46wCk7QhVBLc5NaigrDCMPTUEQqkSE7Ln2QwpXtZStQNzFCLVGu5bs2BcApA5x9da7F5Ht83fbh8).
+Origin tx (Session 49 validation):
+  2RopfgiSF1sP46wCk7QhVBLc5NaigrDCMPTUEQqkSE7Ln2QwpXtZStQNzFCLVGu5bs2BcApA5x9da7F5Ht83fbh8
 """
 
 import asyncio
