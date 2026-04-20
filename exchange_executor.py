@@ -113,10 +113,23 @@ def _execute_solana(token_addr: str, symbol: str, position_usd: float, price_usd
         return False
 
     try:
-        # Check SOL balance for gas
+        # S58 P0: Pre-flight SOL balance check.
+        # Jupiter swaps routinely include a CreateIdempotent ATA instruction
+        # for the output token mint. ATA creation requires ~0.00204 SOL of
+        # rent-exempt deposit, separate from the ~0.000105 SOL tx fee.
+        # Plus Jito tip (~0.0005 SOL when enabled). Threshold must cover all
+        # three with a safety margin, otherwise we burn fees on txs that fail
+        # at the ATA-create step with error Custom 0x1 (insufficient lamports).
+        # Ref: jfiaFUEu... (ROCCO), 5mbMdyxs... (pipi) — both had wallet at
+        # ~0.0017 SOL, needed ~0.002 for ATA rent.
         sol_balance = sol_exec.check_sol_balance()
-        if sol_balance < 0.001:
-            log.warning("Insufficient SOL for gas (%.6f SOL) — skipping %s", sol_balance, symbol)
+        SOL_MIN_FOR_ENTRY = 0.005  # ~0.002 ATA + ~0.0005 Jito + ~0.0001 fee + buffer
+        if sol_balance < SOL_MIN_FOR_ENTRY:
+            log.warning(
+                "INSUFFICIENT_SOL: balance=%.6f SOL < threshold=%.6f SOL — "
+                "skipping %s (top up wallet %s to resume Solana entries)",
+                sol_balance, SOL_MIN_FOR_ENTRY, symbol, wallet,
+            )
             return False
 
         # Convert USD to lamports: 1 USDC = 1_000_000 lamports (6 decimals)

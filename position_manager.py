@@ -198,6 +198,16 @@ def _sell_solana(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int)
                  symbol, sig, expected_usdc, slippage_bps)
         confirmed, err_code = se.confirm_tx(sig, max_retries=20, poll_seconds=2.0)
         if confirmed:
+            # S58 P0: reclaim ATA rent for this specific token after a
+            # successful sell. Best-effort — if it fails, the sell still
+            # succeeded and the next sweep (manual close_dead_atas or the
+            # next sell on the same mint) will reclaim it.
+            try:
+                closed = se.close_empty_atas(mint_filter=token_addr)
+                if closed:
+                    log.info("ATA_RECLAIM: closed %d empty ATA(s) for %s after sell", closed, symbol)
+            except Exception as exc:
+                log.debug("ATA_RECLAIM best-effort failed for %s: %s", symbol, exc)
             return True, expected_usdc, None
         log.warning("Sell tx sent but not confirmed (%s): %s sig=%s", err_code, symbol, sig)
         return False, 0.0, err_code

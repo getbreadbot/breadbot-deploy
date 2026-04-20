@@ -291,6 +291,93 @@ def confirm_tx(signature: str, max_retries: int = 15, poll_seconds: float = 2.0)
     return False, "TIMEOUT"
 
 
+def close_empty_atas(mint_filter: str | None = None) -> int:
+    """
+    Close empty SPL token ATAs owned by the bot wallet, reclaiming ~0.00204 SOL
+    of rent per ATA back to the wallet's native SOL balance.
+
+    If mint_filter is provided, only close the ATA for that specific mint
+    (used after a successful sell to reclaim that position's rent). If None,
+    closes ALL empty ATAs owned by the wallet (sweep mode).
+
+    USDC is always skipped even if its balance shows zero — closing the main
+    stablecoin ATA would require re-creating it on the next trade.
+
+    Returns the number of ATAs closed. Best-effort — errors are logged and
+    swallowed so callers can treat this as fire-and-forget.
+
+    S58 P0: added to prevent silent SOL drain from accumulated rug/loss ATAs.
+    """
+    try:
+        import base58
+        from solders.keypair import Keypair
+        from solders.transaction import VersionedTransaction
+        from solders.message import MessageV0
+        from solana.rpc.api import Client
+        from solana.rpc.commitment import Confirmed
+        from solana.rpc.types import TokenAccountOpts, TxOpts
+        from spl.token.constants import TOKEN_PROGRAM_ID
+        from spl.token.instructions import close_account, CloseAccountParams
+    except ImportError as exc:
+        logger.debug("close_empty_atas: dependencies missing (%s) — skipping", exc)
+        return 0
+
+    if not WALLET_PUBKEY or not PRIVATE_KEY_B58:
+        return 0
+
+    try:
+        kp = Keypair.from_bytes(base58.b58decode(PRIVATE_KEY_B58))
+        wallet = kp.pubkey()
+        client = Client(RPC_URL)
+
+        resp = client.get_token_accounts_by_owner_json_parsed(
+            wallet, TokenAccountOpts(program_id=TOKEN_PROGRAM_ID)
+        )
+        accts = resp.value or []
+
+        closeable = []
+        for a in accts:
+            info = a.account.data.parsed["info"]
+            mint = info["mint"]
+            bal = float(info["tokenAmount"]["uiAmountString"] or 0)
+            if bal != 0:
+                continue
+            if mint == USDC_MINT:
+                continue
+            if mint_filter and mint != mint_filter:
+                continue
+            closeable.append(a.pubkey)
+
+        if not closeable:
+            return 0
+
+        ixs = [
+            close_account(CloseAccountParams(
+                program_id=TOKEN_PROGRAM_ID,
+                account=ata, dest=wallet, owner=wallet,
+            ))
+            for ata in closeable
+        ]
+
+        bh = client.get_latest_blockhash().value.blockhash
+        msg = MessageV0.try_compile(
+            payer=wallet, instructions=ixs,
+            address_lookup_table_accounts=[], recent_blockhash=bh,
+        )
+        tx = VersionedTransaction(msg, [kp])
+
+        sig = client.send_raw_transaction(
+            bytes(tx),
+            opts=TxOpts(skip_preflight=False, preflight_commitment=Confirmed),
+        )
+        logger.info("close_empty_atas: closed %d ATAs sig=%s", len(closeable), sig.value)
+        return len(closeable)
+
+    except Exception as exc:
+        logger.warning("close_empty_atas: best-effort close failed: %s", exc)
+        return 0
+
+
 def check_sol_balance() -> float:
     """
     Return the SOL balance of the configured wallet in SOL (not lamports).
