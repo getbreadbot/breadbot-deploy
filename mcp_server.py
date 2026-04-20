@@ -527,7 +527,8 @@ def get_grid_status() -> dict:
             "SELECT * FROM grid_sessions ORDER BY id DESC LIMIT 1"
         ).fetchone()
         fills = conn.execute(
-            "SELECT COUNT(*) as cnt, SUM(net_profit_usd) as profit FROM grid_fills WHERE session_id = ?",
+            # S57 P3 Phase 3: grid_fills uses net_profit (not net_profit_usd)
+            "SELECT COUNT(*) as cnt, SUM(net_profit) as profit FROM grid_fills WHERE session_id = ?",
             (session["id"] if session else 0,)
         ).fetchone() if session else None
         conn.close()
@@ -634,10 +635,12 @@ def get_strategy_performance() -> dict:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
 
     # Grid performance
+    # S57 P3 Phase 3: grid_fills schema uses net_profit (not net_profit_usd)
+    # and filled_at (not completed_at). MCP readers had stale names.
     grid = conn.execute(
-        """SELECT COUNT(*) as cycles, SUM(net_profit_usd) as profit,
+        """SELECT COUNT(*) as cycles, SUM(net_profit) as profit,
            SUM(buy_price * quantity) as volume
-           FROM grid_fills WHERE completed_at > ?""",
+           FROM grid_fills WHERE filled_at > ?""",
         (cutoff,)
     ).fetchone()
 
