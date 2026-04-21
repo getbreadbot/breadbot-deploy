@@ -330,8 +330,17 @@ def close_empty_atas(mint_filter: str | None = None) -> int:
         wallet = kp.pubkey()
         client = Client(RPC_URL)
 
+        # S60 P1: Helius RPC default commitment can return a stale snapshot
+        # immediately after confirm_tx. Sleep briefly and use Confirmed
+        # commitment so we see the post-sell zero balance, not the pre-sell
+        # cached balance. Without this, empty ATAs silently leak.
+        import time
+        time.sleep(3.0)
+
         resp = client.get_token_accounts_by_owner_json_parsed(
-            wallet, TokenAccountOpts(program_id=TOKEN_PROGRAM_ID)
+            wallet,
+            TokenAccountOpts(program_id=TOKEN_PROGRAM_ID),
+            commitment=Confirmed,
         )
         accts = resp.value or []
 
