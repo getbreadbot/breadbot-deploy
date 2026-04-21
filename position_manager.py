@@ -213,6 +213,20 @@ def _sell_solana(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int)
         return False, 0.0, err_code
     except Exception as exc:
         log.error("Sell failed for %s: %s", symbol, exc, exc_info=True)
+        # S60 P2: classify tx-size failures distinctly. When slippage escalates
+        # to 1500bps, Jupiter may return a multi-hop route whose serialized tx
+        # exceeds Solana's max (~1644 bytes). Both Jito and standard RPC reject
+        # these with "base64 encoded too large" or "could not be decoded".
+        # These are NOT terminal — a higher-slippage tier often produces a
+        # different, smaller route. Return TX_TOO_LARGE so the escalator
+        # continues rather than falling to 2-min cooldown.
+        msg = str(exc).lower()
+        if (
+            "base64 encoded too large" in msg
+            or "could not be decoded" in msg
+            or "transaction too large" in msg
+        ):
+            return False, 0.0, "TX_TOO_LARGE"
         return False, 0.0, "EXCEPTION"
 
 
@@ -423,11 +437,14 @@ def _evaluate_position(row: dict) -> None:
                 log.info("Position #%d %s: %s succeeded on retry %d with slippage=%dbps",
                          pid, symbol, action, i, try_slip)
             break
-        # Only retry on SLIPPAGE — every other error falls through to cooldown.
-        if err_code != "SLIPPAGE":
+        # Only retry on SLIPPAGE or TX_TOO_LARGE — other errors fall through to
+        # cooldown. TX_TOO_LARGE means the current slippage tier produced a
+        # multi-hop route that exceeds the ~1644-byte serialized tx limit.
+        # A higher-slippage tier may yield a simpler route that fits. (S60 P2)
+        if err_code not in ("SLIPPAGE", "TX_TOO_LARGE"):
             break
-        log.warning("Position #%d %s: %s slippage=%dbps failed — escalating to next tier",
-                    pid, symbol, action, try_slip)
+        log.warning("Position #%d %s: %s slippage=%dbps failed (%s) — escalating to next tier",
+                    pid, symbol, action, try_slip, err_code)
 
     if not success:
         log.warning("Position #%d %s: %s sell did not confirm (err=%s, last_slippage=%dbps) — will retry after cooldown",
