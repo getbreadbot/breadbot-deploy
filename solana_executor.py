@@ -307,10 +307,17 @@ def close_empty_atas(mint_filter: str | None = None) -> int:
     swallowed so callers can treat this as fire-and-forget.
 
     S58 P0: added to prevent silent SOL drain from accumulated rug/loss ATAs.
+    S60 P1: added sleep + Confirmed commitment to avoid Helius stale cache.
+    S61 P1: now scans BOTH legacy SPL Token and Token-2022 programs. Pump.fun
+            mints use Token-2022, so the legacy-only scan missed every
+            post-sell pump.fun ATA (~13 leaked between S58 and S61).
+            Each closeable entry is tagged with its owning program so the
+            close_account instruction targets the correct one.
     """
     try:
         import base58
         from solders.keypair import Keypair
+        from solders.pubkey import Pubkey
         from solders.transaction import VersionedTransaction
         from solders.message import MessageV0
         from solana.rpc.api import Client
@@ -325,6 +332,12 @@ def close_empty_atas(mint_filter: str | None = None) -> int:
     if not WALLET_PUBKEY or not PRIVATE_KEY_B58:
         return 0
 
+    # Token-2022 program id. Not exported as a constant by spl-token-py, so
+    # we pin the canonical mainnet address here.
+    TOKEN_2022_PROGRAM_ID = Pubkey.from_string(
+        "TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb"
+    )
+
     try:
         kp = Keypair.from_bytes(base58.b58decode(PRIVATE_KEY_B58))
         wallet = kp.pubkey()
@@ -337,54 +350,51 @@ def close_empty_atas(mint_filter: str | None = None) -> int:
         import time
         time.sleep(3.0)
 
-        resp = client.get_token_accounts_by_owner_json_parsed(
-            wallet,
-            TokenAccountOpts(program_id=TOKEN_PROGRAM_ID),
-            commitment=Confirmed,
-        )
-        accts = resp.value or []
-
-        closeable = []
-        for a in accts:
-            info = a.account.data.parsed["info"]
-            mint = info["mint"]
-            bal = float(info["tokenAmount"]["uiAmountString"] or 0)
-            if bal != 0:
-                continue
-            if mint == USDC_MINT:
-                continue
-            if mint_filter and mint != mint_filter:
-                continue
-            closeable.append(a.pubkey)
+        closeable: list[tuple] = []  # (ata_pubkey, owning_program_id)
+        for prog_id in (TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID):
+            resp = client.get_token_accounts_by_owner_json_parsed(
+                wallet,
+                TokenAccountOpts(program_id=prog_id),
+                commitment=Confirmed,
+            )
+            for a in (resp.value or []):
+                info = a.account.data.parsed["info"]
+                mint = info["mint"]
+                bal = float(info["tokenAmount"]["uiAmountString"] or 0)
+                if bal != 0:
+                    continue
+                if mint == USDC_MINT:
+                    continue
+                if mint_filter and mint != mint_filter:
+                    continue
+                closeable.append((a.pubkey, prog_id))
 
         if not closeable:
             return 0
 
         ixs = [
             close_account(CloseAccountParams(
-                program_id=TOKEN_PROGRAM_ID,
+                program_id=prog_id,
                 account=ata, dest=wallet, owner=wallet,
             ))
-            for ata in closeable
+            for ata, prog_id in closeable
         ]
-
         bh = client.get_latest_blockhash().value.blockhash
         msg = MessageV0.try_compile(
             payer=wallet, instructions=ixs,
             address_lookup_table_accounts=[], recent_blockhash=bh,
         )
         tx = VersionedTransaction(msg, [kp])
-
         sig = client.send_raw_transaction(
             bytes(tx),
             opts=TxOpts(skip_preflight=False, preflight_commitment=Confirmed),
         )
         logger.info("close_empty_atas: closed %d ATAs sig=%s", len(closeable), sig.value)
         return len(closeable)
-
     except Exception as exc:
         logger.warning("close_empty_atas: best-effort close failed: %s", exc)
         return 0
+
 
 
 def check_sol_balance() -> float:
