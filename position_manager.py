@@ -370,8 +370,36 @@ def _evaluate_position(row: dict) -> None:
     pct_vs_entry = ((price - entry) / entry) * 100
     partial_done = _partial_taken.get(pid, False)
 
-    # Decision tree — order matters: hard stop-loss wins
-    if price <= sl:
+    # S62 P1: SL arming delay. For the first 120 seconds after entry, skip SL
+    # checks. Rationale: pullback-monitor buys execute into steep downdrafts
+    # and the first 1-2 minutes are the highest-noise window. KITTY (-16% in
+    # 2 min), GME (-38% in 5 min), and BRICKS (-36% in 60 seconds) all
+    # stopped out immediately after entry, and all three went on to dump
+    # 90+% afterward — confirming the stops were correctly placed, but also
+    # that we entered into continued downside. Deferring SL arming for 120s
+    # gives the position room to settle; TP25 and TP50 remain active so
+    # upside capture is unaffected. If price is still below SL after 120s,
+    # the normal flow resumes and exits.
+    _SL_ARM_DELAY_SEC = 120
+    try:
+        from datetime import datetime, timezone
+        opened_at_str = row["opened_at"]
+        if opened_at_str:
+            opened_dt = datetime.fromisoformat(opened_at_str.replace(" ", "T")).replace(tzinfo=timezone.utc)
+            age_sec = (datetime.now(timezone.utc) - opened_dt).total_seconds()
+        else:
+            age_sec = 1e9  # unknown opened_at — arm immediately, safer default
+    except Exception:
+        age_sec = 1e9  # parse failure — arm immediately
+    sl_armed = age_sec >= _SL_ARM_DELAY_SEC
+    if not sl_armed and price <= sl:
+        log.info(
+            "Position #%d %s: price=$%.9f below SL=$%.9f (%.1fs < %ds arming delay) — SUPPRESSING SL",
+            pid, symbol, price, sl, age_sec, _SL_ARM_DELAY_SEC,
+        )
+
+    # Decision tree — order matters: hard stop-loss wins (once armed)
+    if sl_armed and price <= sl:
         action = "SL"
         sell_fraction = 1.0
     elif price >= tp50:
