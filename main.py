@@ -37,6 +37,12 @@ logging.basicConfig(
 )
 log = logging.getLogger("main")
 
+# S62 P0: silence httpx INFO logging. httpx logs every request URL at INFO
+# level, which leaks API keys embedded as query params (Helius, Coinalyze,
+# etc.) into systemd journals and any transcript that captures stdout.
+# WARNING keeps connection errors visible; drops request URL noise.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 
 # ── DB init ───────────────────────────────────────────────────────────────────
 
