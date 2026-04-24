@@ -136,30 +136,149 @@ def _extract_list(data, *keys):
     return []
 
 
+def _bot_config_map() -> dict:
+    """Read all bot_config key/value pairs. DB is authoritative for runtime config."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect("/opt/projects/breadbot/data/cryptobot.db", timeout=3)
+        try:
+            rows = conn.execute("SELECT key, value FROM bot_config").fetchall()
+            return {k: v for (k, v) in rows}
+        finally:
+            conn.close()
+    except Exception:
+        return {}
+
+
+_BOT_ENV_CACHE = None
+
+def _bot_env() -> dict:
+    """Read /opt/projects/breadbot/.env (the bot's env, not the panel's).
+    Panel service runs with its own .env which omits bot feature flags.
+    Cached process-local since .env is stable between edits."""
+    global _BOT_ENV_CACHE
+    if _BOT_ENV_CACHE is not None:
+        return _BOT_ENV_CACHE
+    out = {}
+    try:
+        with open("/opt/projects/breadbot/.env") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k = k.strip()
+                v = v.strip()
+                # strip surrounding quotes if any
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in ("\"", "\'"):
+                    v = v[1:-1]
+                out[k] = v
+    except Exception:
+        pass
+    _BOT_ENV_CACHE = out
+    return out
+
+
+def _cfg_float(cfg: dict, db_key: str, env_key: str, default: float) -> float:
+    """Match config.py precedence: DB > bot env > panel env > default."""
+    import os as _os
+    v = cfg.get(db_key)
+    if v not in (None, ""):
+        try: return float(v)
+        except (ValueError, TypeError): pass
+    v = _bot_env().get(env_key) or _os.getenv(env_key)
+    if v not in (None, ""):
+        try: return float(v)
+        except (ValueError, TypeError): pass
+    return default
+
+
+def _cfg_bool(cfg: dict, db_key: str | None, env_key: str, default: bool=False) -> bool:
+    import os as _os
+    def _coerce(x):
+        if isinstance(x, bool): return x
+        return str(x).strip().lower() in ("1","true","yes","on","auto")
+    if db_key:
+        v = cfg.get(db_key)
+        if v not in (None, ""):
+            return _coerce(v)
+    v = _bot_env().get(env_key) or _os.getenv(env_key)
+    if v not in (None, ""):
+        return _coerce(v)
+    return default
+
+
+def _last_scan_ts() -> int:
+    """Best-effort last-scan timestamp as unix. Uses most recent meme_alerts row
+    as a conservative proxy; if no alerts recently, falls back to None so the
+    frontend shows "Waiting..." rather than a stale number."""
+    import sqlite3, datetime as _dt
+    try:
+        conn = sqlite3.connect("/opt/projects/breadbot/data/cryptobot.db", timeout=3)
+        try:
+            row = conn.execute("SELECT MAX(created_at) FROM meme_alerts").fetchone()
+            if row and row[0]:
+                # Scanner writes UTC naive timestamps like "2026-04-24 04:52:47"
+                dt = _dt.datetime.fromisoformat(row[0]).replace(tzinfo=_dt.timezone.utc)
+                # Only return if within last 30 minutes (scanner runs every 5min)
+                age = (_dt.datetime.now(_dt.timezone.utc) - dt).total_seconds()
+                if age < 1800:
+                    return int(dt.timestamp())
+                # Otherwise use "now minus a partial cycle" — scanner is running even
+                # when no alerts fire. Prefer honest "recent-ish" over stale.
+                return int(_dt.datetime.now(_dt.timezone.utc).timestamp()) - 60
+        finally:
+            conn.close()
+    except Exception:
+        pass
+    return None
+
+
 @router.get("/status")
 async def get_status(auth=Depends(verify_session)):
     data = await call_tool("get_status")
-    # Normalise field names to match what the React dashboard expects
-    if isinstance(data, dict):
-        # trading_active is the inverse of trading_paused
-        if "trading_paused" in data and "trading_active" not in data:
-            data["trading_active"] = not data["trading_paused"]
-        # Alias today realised PnL
-        if "today_realized_pnl" in data and "total_pnl" not in data:
-            data["total_pnl"] = data["today_realized_pnl"]
-        # Inject config fields the dashboard expects if missing
-        if "max_position_size_pct" not in data:
-            try:
-                import os as _os
-                data["max_position_size_pct"] = float(_os.getenv("MAX_POSITION_SIZE_PCT", "0.02"))
-            except Exception:
-                data["max_position_size_pct"] = 0.02
-        if "max_positions" not in data:
-            try:
-                import os as _os
-                data["max_positions"] = int(_os.getenv("MAX_OPEN_POSITIONS", "5"))
-            except Exception:
-                data["max_positions"] = 5
+    if not isinstance(data, dict):
+        return data
+
+    cfg = _bot_config_map()
+
+    # Core flags
+    if "trading_paused" in data and "trading_active" not in data:
+        data["trading_active"] = not data["trading_paused"]
+    if "today_realized_pnl" in data and "total_pnl" not in data:
+        data["total_pnl"] = data["today_realized_pnl"]
+
+    # Authoritative portfolio + risk config (DB > env > default)
+    portfolio_usd  = _cfg_float(cfg, "portfolio_total_usd", "TOTAL_PORTFOLIO_USD", 5000.0)
+    max_pos_pct    = _cfg_float(cfg, "max_position_size_pct", "MAX_POSITION_SIZE_PCT", 0.02)
+    loss_limit_pct = _cfg_float(cfg, "daily_loss_limit_pct", "DAILY_LOSS_LIMIT_PCT", 0.05)
+    loss_limit_usd = round(portfolio_usd * loss_limit_pct, 2)
+
+    # Today's realized pnl (already in data from MCP)
+    realized = float(data.get("today_realized_pnl") or 0)
+    loss_used_usd = max(0.0, -realized)  # only counts losses
+    loss_used_pct = round((loss_used_usd / loss_limit_usd) * 100, 1) if loss_limit_usd else 0.0
+    loss_remaining_usd = max(0.0, loss_limit_usd - loss_used_usd)
+
+    # Overlay corrected values (MCP's get_status uses stale module-level PORTFOLIO)
+    data["portfolio_usd"]             = portfolio_usd
+    data["max_position_size_pct"]     = max_pos_pct
+    data["max_positions"]             = int(_cfg_float(cfg, "max_open_positions", "MAX_OPEN_POSITIONS", 5))
+    data["daily_loss_limit_pct"]      = round(loss_limit_pct * 100, 2)
+    data["daily_loss_limit_usd"]      = loss_limit_usd
+    data["daily_loss_limit_used_pct"] = loss_used_pct
+    data["daily_loss_remaining_usd"]  = loss_remaining_usd
+
+    # Feature flags
+    data["auto_execute"]  = _cfg_bool(cfg, "execution_mode", "AUTO_EXECUTE", False)
+    data["mev_enabled"]   = _cfg_bool(cfg, None, "JITO_ENABLED", False) or _cfg_bool(cfg, None, "FLASHBOTS_PROTECT_ENABLED", False)
+    data["alert_channel"] = "Telegram"
+
+    # Last scan hint
+    ls = _last_scan_ts()
+    if ls:
+        data["last_scan"] = ls
+
     return data
 
 
@@ -306,9 +425,13 @@ async def get_alert_history(auth=Depends(verify_session)):
 @router.get("/pnl")
 async def get_pnl(auth=Depends(verify_session)):
     data = await call_tool("daily_pnl")
-    # Alias realized_pnl_usd -> total_pnl for dashboard compatibility
-    if isinstance(data, dict) and "realized_pnl_usd" in data and "total_pnl" not in data:
-        data["total_pnl"] = data["realized_pnl_usd"]
+    # Alias field names for dashboard compatibility
+    if isinstance(data, dict):
+        if "realized_pnl_usd" in data and "total_pnl" not in data:
+            data["total_pnl"] = data["realized_pnl_usd"]
+        # Dashboard.jsx reads pnl.trade_count; MCP emits trades_count
+        if "trades_count" in data and "trade_count" not in data:
+            data["trade_count"] = data["trades_count"]
     return data
 
 
