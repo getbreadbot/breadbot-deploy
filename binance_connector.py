@@ -25,6 +25,27 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).parent / ".env")
 
+# ── IPv4 pinning (S65) ────────────────────────────────────────────────────────
+# The VPS has dual-stack IPv4+IPv6. api.binance.us resolves to both. By default
+# Python/requests prefers IPv6 for the outbound connection, but the Binance.US
+# API key IP whitelist contains only the VPS IPv4 (76.13.100.34). An IPv6
+# egress -> -2015 "Invalid API-key, IP, or permissions" regardless of creds.
+# We force IPv4 here so the outbound IP matches the whitelisted address.
+import socket as _socket
+from urllib3.util import connection as _urllib3_connection
+_orig_create_connection = _urllib3_connection.create_connection
+def _force_ipv4_connection(address, *args, **kwargs):
+    host, port = address
+    addrs = _socket.getaddrinfo(host, port, _socket.AF_INET, _socket.SOCK_STREAM)
+    if addrs:
+        return _orig_create_connection((addrs[0][4][0], port), *args, **kwargs)
+    return _orig_create_connection(address, *args, **kwargs)
+# Only override if we have not already done so (idempotent on re-import)
+if getattr(_urllib3_connection.create_connection, "__name__", "") != "_force_ipv4_connection":
+    _urllib3_connection.create_connection = _force_ipv4_connection
+
+
+
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
@@ -120,19 +141,36 @@ def get_open_orders(symbol: str | None = None) -> list:
     return data
 
 
+def _fmt_decimal(value) -> str:
+    """Format a numeric value as a plain decimal string with no scientific
+    notation and no trailing zeros. Binance.US rejects '1e-05' as qty."""
+    # Use format() with fixed precision then strip zeros. 8 decimals covers
+    # the tightest stepSize on any Binance.US pair (satoshi = 0.00000001).
+    s = f"{float(value):.8f}"
+    # Strip trailing zeros and a trailing dot if all decimals were zero.
+    if "." in s:
+        s = s.rstrip("0").rstrip(".")
+    return s or "0"
+
+
 def place_order(symbol: str, side: str, order_type: str, quantity: float,
                 price: float | None = None, time_in_force: str = "GTC") -> dict:
     """
     Place a spot order.
     side: 'BUY'/'SELL'. order_type: 'MARKET'/'LIMIT'/'STOP_LOSS_LIMIT'.
     price required for LIMIT orders.
+
+    S68 P4b: qty and price are formatted as plain decimal strings to avoid
+    Python float repr falling back to scientific notation at small sizes,
+    which Binance.US rejects with HTTP 400.
     """
     params: dict = {"symbol": symbol.upper(), "side": side.upper(),
-                    "type": order_type.upper(), "quantity": quantity}
+                    "type": order_type.upper(),
+                    "quantity": _fmt_decimal(quantity)}
     if order_type.upper() == "LIMIT":
         if price is None:
             raise ValueError("price is required for LIMIT orders")
-        params["price"]       = price
+        params["price"]       = _fmt_decimal(price)
         params["timeInForce"] = time_in_force
     result = _post("/api/v3/order", params)
     logger.info("Order placed: %s %s %s status=%s orderId=%s",

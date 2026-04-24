@@ -68,6 +68,31 @@ def is_enabled() -> bool:
     except Exception:
         # Fallback to module constant if config import ever fails
         return GRID_ENABLED
+
+
+def _set_enabled(value: bool) -> None:
+    """Write grid_enabled to bot_config. Called by engine.start/stop so that
+    any activation path (Telegram, panel, MCP) keeps the DB flag in sync with
+    the live engine state. Logs but does not raise on write failure — DB sync
+    is best-effort, engine state is authoritative."""
+    try:
+        from config import DB_PATH
+        from datetime import datetime, timezone
+        import sqlite3
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        conn = sqlite3.connect(DB_PATH, timeout=10)
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO bot_config (key, value, updated_at) "
+                "VALUES (?, ?, ?)",
+                ("grid_enabled", "true" if value else "false", now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        log.info("grid_enabled flag written: %s", value)
+    except Exception as exc:
+        log.warning("Failed to write grid_enabled flag (%s): %s", value, exc)
 GRID_PAIR          = os.getenv("GRID_PAIR",            "BTC/USDT").upper().replace("/", "")
 GRID_UPPER_PCT     = float(os.getenv("GRID_UPPER_PCT",       "10"))
 GRID_LOWER_PCT     = float(os.getenv("GRID_LOWER_PCT",       "10"))
@@ -159,6 +184,145 @@ def _quantize_order(symbol: str, quantity: float, price):
 
     return qty, out_price
 
+
+
+# ── Inventory preload (S68 P4) ───────────────────────────────────────────────
+# A grid needs both base and quote assets before activation: BUY levels
+# consume quote, SELL levels consume base. Cold-starting with only quote
+# means only BUYs can be placed, leaving the upper half of the ladder
+# un-backed. preload_base_inventory() solves this by market-buying the
+# shortfall at entry so the full ladder can be placed.
+#
+# PRELOAD_MAX_USD is a safety cap — if the calculated preload exceeds it,
+# we fail activation rather than spending more than the operator expects.
+
+PRELOAD_MAX_USD = float(os.getenv("GRID_PRELOAD_MAX_USD", "400"))
+
+
+def _get_free_balance(asset: str) -> float:
+    """Return free (unlocked) balance for the given asset on Binance.US.
+    Returns 0.0 on any API error — caller must treat that as no inventory."""
+    try:
+        acct = binance.get_account()
+        for b in acct.get("balances", []):
+            if b.get("asset", "").upper() == asset.upper():
+                return float(b.get("free", 0) or 0)
+    except Exception as exc:
+        log.warning("get_free_balance(%s) failed: %s", asset, exc)
+    return 0.0
+
+
+def _split_pair(symbol: str) -> tuple[str, str]:
+    """Extract (base, quote) from a spot symbol like BTCUSD or ETHUSDT.
+    Uses exchange info so we do not hardcode asset assumptions."""
+    try:
+        info = binance.get_exchange_info(symbol.upper())
+        syms = info.get("symbols", [])
+        if syms:
+            return syms[0].get("baseAsset", ""), syms[0].get("quoteAsset", "")
+    except Exception as exc:
+        log.warning("get_exchange_info(%s) failed: %s", symbol, exc)
+    s = symbol.upper()
+    if s.endswith("USDT"):
+        return s[:-4], "USDT"
+    if s.endswith("USDC"):
+        return s[:-4], "USDC"
+    if s.endswith("USD"):
+        return s[:-3], "USD"
+    return s, ""
+
+
+def preload_base_inventory(symbol: str, levels: list, entry_price: float) -> tuple[bool, str]:
+    """Ensure the account holds enough base asset to back every SELL level.
+
+    If insufficient, places a MARKET BUY for the shortfall. Returns
+    (True, message) on success (including "already sufficient") or
+    (False, error_reason) on any failure that should block activation."""
+    base, quote = _split_pair(symbol)
+    if not base or not quote:
+        return False, f"Could not parse base/quote from {symbol}"
+
+    sell_qty_needed = sum(lvl.quantity for lvl in levels if lvl.side == "SELL")
+    if sell_qty_needed <= 0:
+        return True, "No SELL levels — preload not needed"
+
+    free_base = _get_free_balance(base)
+    shortfall = sell_qty_needed - free_base
+    if shortfall <= 0:
+        return True, f"Sufficient {base} inventory ({free_base:.8f} >= {sell_qty_needed:.8f})"
+
+    # S68 P4 fee headroom: Binance.US spot commission (~0.1%) is taken from
+    # the base asset on MARKET BUY. Without headroom, post-fee BTC falls
+    # slightly short of sell_qty_needed and the highest SELL level rejects
+    # with insufficient balance. Bump by 1% to cover fee + rounding noise.
+    shortfall_with_headroom = shortfall * 1.01
+
+    # Quantize the headroom-adjusted shortfall to LOT_SIZE so the market buy
+    # is acceptable.
+    q = _quantize_order(symbol, shortfall_with_headroom, None)
+    if q is None:
+        return False, (
+            f"Preload shortfall {shortfall:.8f} {base} is below minQty after "
+            f"quantization — cannot preload"
+        )
+    preload_qty, _ = q
+    # _quantize_order floors. If that drops us below the actual need, bump
+    # up by one step so we always cover (never under-preload).
+    f = _get_symbol_filters(symbol)
+    step = f.get("step_size", 0) or 0
+    min_qty = f.get("min_qty", 0) or 0
+    if step > 0 and preload_qty < shortfall_with_headroom:
+        preload_qty = preload_qty + step
+        if step < 1:
+            decimals = max(0, -int(round(math.log10(step))))
+            preload_qty = round(preload_qty, decimals)
+    if min_qty > 0 and preload_qty < min_qty:
+        preload_qty = min_qty
+
+    est_cost_usd = preload_qty * entry_price
+
+    if est_cost_usd > PRELOAD_MAX_USD:
+        return False, (
+            f"Preload cost estimate ${est_cost_usd:.2f} exceeds "
+            f"GRID_PRELOAD_MAX_USD ${PRELOAD_MAX_USD:.2f}. "
+            f"Raise the cap in .env or reduce grid allocation."
+        )
+
+    free_quote = _get_free_balance(quote)
+    if free_quote < est_cost_usd * 1.01:
+        return False, (
+            f"Insufficient {quote} balance: have ${free_quote:.2f}, "
+            f"need ~${est_cost_usd * 1.01:.2f} for preload. "
+            f"Fund the account and retry."
+        )
+
+    log.info(
+        "Preload: buying %.8f %s (~$%.2f %s, entry=$%.2f) to back %d SELL levels",
+        preload_qty, base, est_cost_usd, quote, entry_price,
+        sum(1 for lvl in levels if lvl.side == "SELL"),
+    )
+
+    try:
+        result = binance.place_order(symbol, "BUY", "MARKET", preload_qty)
+    except Exception as exc:
+        return False, f"Preload MARKET BUY failed: {exc}"
+
+    filled_qty = float(result.get("executedQty", 0) or 0)
+    cumm_quote = float(result.get("cummulativeQuoteQty", 0) or 0)
+    avg_price = (cumm_quote / filled_qty) if filled_qty > 0 else 0.0
+
+    if filled_qty <= 0:
+        return False, f"Preload order placed but did not fill: {result}"
+
+    log.info(
+        "Preload filled: %.8f %s at avg $%.2f (total $%.2f). orderId=%s",
+        filled_qty, base, avg_price, cumm_quote, result.get("orderId"),
+    )
+
+    return True, (
+        f"Preloaded {filled_qty:.8f} {base} at avg ${avg_price:,.2f} "
+        f"(total ${cumm_quote:,.2f})"
+    )
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -476,6 +640,18 @@ def on_order_fill(session: GridSession, filled_level: GridLevel) -> Optional[Gri
                 log.warning("Counter SELL skipped - qty below minQty after quantize")
                 return None
             qty_q, price_q = q
+            # S68 P4: if the counter level already has a live order, cancel it
+            # first so we never orphan an order on the exchange.
+            if counter.order_id:
+                try:
+                    binance.cancel_order(session.pair, counter.order_id)
+                    log.info("Cancelled stale order %s on counter level @ %.2f",
+                             counter.order_id, counter.price)
+                except Exception as exc:
+                    log.warning("Failed to cancel stale counter order %s: %s — skipping counter SELL",
+                                counter.order_id, exc)
+                    return None
+                counter.order_id = None
             try:
                 result = binance.place_order(
                     session.pair, "SELL", "LIMIT",
@@ -509,6 +685,17 @@ def on_order_fill(session: GridSession, filled_level: GridLevel) -> Optional[Gri
                 log.warning("Counter BUY skipped - qty below minQty after quantize")
                 return None
             qty_q, price_q = q
+            # S68 P4: cancel stale order on counter level before overwriting.
+            if buy_level.order_id:
+                try:
+                    binance.cancel_order(session.pair, buy_level.order_id)
+                    log.info("Cancelled stale order %s on counter level @ %.2f",
+                             buy_level.order_id, buy_level.price)
+                except Exception as exc:
+                    log.warning("Failed to cancel stale counter order %s: %s — skipping counter BUY",
+                                buy_level.order_id, exc)
+                    return None
+                buy_level.order_id = None
             try:
                 result = binance.place_order(
                     session.pair, "BUY", "LIMIT",
@@ -626,6 +813,14 @@ class GridEngine:
 
         levels, upper, lower = calculate_grid_levels(entry_price)
 
+        # S68 P4: preload base asset inventory so the full ladder can place.
+        # If the account holds only quote currency (e.g. $500 USD / 0 BTC),
+        # market-buy the shortfall at entry to back all SELL levels.
+        ok, preload_msg = preload_base_inventory(GRID_PAIR, levels, entry_price)
+        if not ok:
+            return f"Grid activation blocked — preload failed:\n{preload_msg}"
+        log.info("Preload status: %s", preload_msg)
+
         session_id  = db_create_session(GRID_PAIR, entry_price, upper, lower)
         self.session = GridSession(
             db_id       = session_id,
@@ -641,6 +836,11 @@ class GridEngine:
         placed = place_grid_orders(self.session)
         db_update_session(session_id, "active", 0.0, 0)
 
+        # S68 P3: sync the DB flag so the panel reflects active state.
+        # Done after successful order placement only — if start fails mid-way
+        # we leave the flag alone so stale state does not persist.
+        _set_enabled(True)
+
         log.info("Grid started: pair=%s entry=%.2f levels=%d placed=%d",
                  GRID_PAIR, entry_price, len(levels), placed)
 
@@ -652,6 +852,7 @@ class GridEngine:
             f"Levels:     {GRID_NUM_LEVELS}\n"
             f"Allocation: ${GRID_ALLOCATION:,.0f}\n"
             f"RSI(4h):    {rsi:.1f}\n"
+            f"Preload:    {preload_msg}\n"
             f"Orders placed: {placed}"
         )
 
@@ -676,6 +877,9 @@ class GridEngine:
         cycles = self.session.cycles       if self.session else 0
         self._state  = GridState.STANDBY
         self.session = None
+
+        # S68 P3: sync the DB flag so the panel reflects standby state.
+        _set_enabled(False)
 
         return (
             f"Grid STOPPED\n\n"
@@ -784,8 +988,33 @@ async def grid_loop(engine: GridEngine) -> None:
             if _now_enabled != _was_enabled:
                 if _now_enabled:
                     log.info("Grid engine ENABLED — resuming trading logic")
+                    # S68 P3: on false->true transition, if engine is STANDBY
+                    # (no live session), activate it in this process. This is
+                    # the panel-driven activation path — flag flipped in DB,
+                    # scanner picks it up, session created on the singleton
+                    # that grid_loop manages. Avoids the MCP process boundary.
+                    if engine.state == GridState.STANDBY:
+                        try:
+                            result = engine.start()
+                            log.info("Grid auto-start via flag transition: %s",
+                                     result.splitlines()[0] if result else "(no message)")
+                            await _tg_send(client, f"Grid activated from panel.\n\n{result}")
+                        except Exception as exc:
+                            log.error("Auto-start failed: %s", exc)
+                            await _tg_send(client, f"Grid auto-start failed: {exc}")
                 else:
                     log.info("Grid engine DISABLED — standing by (toggle from panel to resume)")
+                    # S68 P3: on true->false transition, if engine is ACTIVE,
+                    # stop it in this process so orders are cancelled cleanly.
+                    if engine.state == GridState.ACTIVE:
+                        try:
+                            result = engine.stop()
+                            log.info("Grid auto-stop via flag transition: %s",
+                                     result.splitlines()[0] if result else "(no message)")
+                            await _tg_send(client, f"Grid deactivated from panel.\n\n{result}")
+                        except Exception as exc:
+                            log.error("Auto-stop failed: %s", exc)
+                            await _tg_send(client, f"Grid auto-stop failed: {exc}")
                 _was_enabled = _now_enabled
             if not _now_enabled:
                 await asyncio.sleep(POLL_INTERVAL)
