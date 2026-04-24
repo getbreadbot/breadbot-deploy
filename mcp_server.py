@@ -518,31 +518,59 @@ def manage_alpha_channels(
 
 @mcp.tool()
 def get_grid_status() -> dict:
-    """Return current grid engine state, RSI, price vs range, cycles, profit."""
+    """Return current grid engine state, RSI, price vs range, cycles, profit.
+
+    S68 P5: reads live DB flag (not module constant) so panel reflects
+    post-S68-P3 runtime state. Normalizes UI state so STOPPED sessions do
+    not confuse the button-disable logic in the panel.
+    """
     try:
-        from grid_engine import GridEngine, trend_guard, GRID_ENABLED, GRID_PAIR
+        from grid_engine import trend_guard, GRID_PAIR, is_enabled
         import os
         conn = _db()
         session = conn.execute(
             "SELECT * FROM grid_sessions ORDER BY id DESC LIMIT 1"
         ).fetchone()
         fills = conn.execute(
-            # S57 P3 Phase 3: grid_fills uses net_profit (not net_profit_usd)
             "SELECT COUNT(*) as cnt, SUM(net_profit) as profit FROM grid_fills WHERE session_id = ?",
             (session["id"] if session else 0,)
         ).fetchone() if session else None
         conn.close()
 
+        flag_enabled = is_enabled()
         blocked, rsi = trend_guard(GRID_PAIR)
+
+        # Normalize UI state: the panel shows this as a label AND uses it to
+        # enable/disable Start/Stop buttons. The raw last-session.state is
+        # unsuitable because a session with state='stopped' should surface
+        # as STANDBY (fresh, ready to start), not STOPPED (mid-shutdown).
+        last_state = (session["state"] if session else "").lower()
+        if flag_enabled and last_state == "active":
+            ui_state = "ACTIVE"
+        elif flag_enabled and last_state in ("", "stopped", "paused"):
+            # Flag is on but no active session yet — scanner is about to
+            # activate (or trend guard is blocking). Surface as STARTING
+            # so the panel shows "activating..." rather than "ACTIVE".
+            ui_state = "STARTING"
+        elif not flag_enabled and last_state == "active":
+            # Flag just flipped off while a session is still active;
+            # scanner will cancel orders on the next poll tick.
+            ui_state = "STOPPING"
+        elif last_state == "paused":
+            ui_state = "PAUSED"
+        else:
+            ui_state = "STANDBY"
+
         return {
-            "enabled": GRID_ENABLED,
+            "enabled": flag_enabled,
             "pair": GRID_PAIR,
             "rsi": round(rsi, 2),
             "trend_guard_blocked": blocked,
-            "state": session["state"] if session else "STANDBY",
-            "entry_price": session["entry_price"] if session else None,
-            "upper_bound": session["upper_bound"] if session else None,
-            "lower_bound": session["lower_bound"] if session else None,
+            "state": ui_state,
+            "raw_session_state": last_state or None,
+            "entry_price": session["entry_price"] if session and ui_state in ("ACTIVE", "PAUSED", "STOPPING") else None,
+            "upper_bound": session["upper_bound"] if session and ui_state in ("ACTIVE", "PAUSED", "STOPPING") else None,
+            "lower_bound": session["lower_bound"] if session and ui_state in ("ACTIVE", "PAUSED", "STOPPING") else None,
             "num_levels": session["num_levels"] if session else int(os.getenv("GRID_NUM_LEVELS", 20)),
             "allocation_usd": float(os.getenv("GRID_ALLOCATION_USD", 500)),
             "cycles_completed": fills["cnt"] if fills else 0,

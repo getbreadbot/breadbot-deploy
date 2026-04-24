@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { get, post } from '../lib/api.js'
 
 function RsiGauge({ rsi }) {
@@ -13,13 +13,11 @@ function RsiGauge({ rsi }) {
         <span style={{ color, fontWeight: 600 }}>{clamped.toFixed(1)}</span>
       </div>
       <div style={{ height: 8, background: 'var(--bg-3)', borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
-        {/* Safe zone band (35–65) */}
         <div style={{
           position: 'absolute', top: 0, bottom: 0,
           left: '35%', width: '30%',
           background: 'rgba(16,185,129,0.15)',
         }} />
-        {/* Pointer */}
         <div style={{
           position: 'absolute', top: 0, bottom: 0,
           left: `${pct}%`, width: 3,
@@ -54,12 +52,21 @@ function StatBox({ label, value, sub, color }) {
   )
 }
 
+const STATE_DISPLAY = {
+  STANDBY:  { label: 'STANDBY',  color: 'var(--text-3)', dot: 'grey'  },
+  STARTING: { label: 'STARTING', color: 'var(--amber)',  dot: 'amber' },
+  ACTIVE:   { label: 'ACTIVE',   color: 'var(--green)',  dot: 'green' },
+  PAUSED:   { label: 'PAUSED',   color: 'var(--amber)',  dot: 'amber' },
+  STOPPING: { label: 'STOPPING', color: 'var(--amber)',  dot: 'amber' },
+}
+
 export default function Grid() {
   const [status, setStatus]   = useState(null)
   const [loading, setLoading] = useState(true)
   const [acting, setActing]   = useState(false)
   const [msg, setMsg]         = useState('')
   const [error, setError]     = useState('')
+  const pollIntervalRef       = useRef(15000)
 
   const load = useCallback(async () => {
     try {
@@ -73,44 +80,73 @@ export default function Grid() {
     }
   }, [])
 
+  // Adaptive polling: fast (3s) while in a transitional state, normal (15s) otherwise.
   useEffect(() => {
     load()
-    const iv = setInterval(load, 15000)
-    return () => clearInterval(iv)
+    const tick = () => load()
+    let timer = setInterval(tick, pollIntervalRef.current)
+    return () => clearInterval(timer)
   }, [load])
+
+  useEffect(() => {
+    const st = status?.state
+    const fast = st === 'STARTING' || st === 'STOPPING'
+    const next = fast ? 3000 : 15000
+    if (next !== pollIntervalRef.current) {
+      pollIntervalRef.current = next
+    }
+  }, [status?.state])
 
   async function doStart() {
     if (status?.trend_guard_blocked) {
       setMsg('RSI trend guard is active — wait for RSI to enter the 35–65 range before starting.')
       return
     }
-    setActing(true); setMsg('')
+    setActing(true); setMsg('Requesting activation...')
     try {
-      await post('/bot/grid/start')
-      setMsg('Grid started.')
+      const res = await post('/bot/grid/start')
+      const message = res?.message || 'Activation requested. Scanner will start the grid within 60 seconds.'
+      setMsg(message)
+      // Bump to fast polling so the state flips from STANDBY -> STARTING -> ACTIVE visibly.
+      pollIntervalRef.current = 3000
       await load()
-    } catch (e) { setMsg(`Error: ${e.message}`) }
-    finally { setActing(false) }
+    } catch (e) {
+      setMsg(`Error: ${e.message}`)
+    } finally {
+      setActing(false)
+    }
   }
 
   async function doStop() {
-    setActing(true); setMsg('')
+    setActing(true); setMsg('Requesting deactivation...')
     try {
-      await post('/bot/grid/stop')
-      setMsg('Grid stopped. Open orders cancelled.')
+      const res = await post('/bot/grid/stop')
+      const message = res?.message || 'Deactivation requested. Scanner will cancel open orders within 60 seconds.'
+      setMsg(message)
+      pollIntervalRef.current = 3000
       await load()
-    } catch (e) { setMsg(`Error: ${e.message}`) }
-    finally { setActing(false) }
+    } catch (e) {
+      setMsg(`Error: ${e.message}`)
+    } finally {
+      setActing(false)
+    }
   }
 
   if (loading) return <div className="loading"><div className="spinner" />Loading grid status...</div>
 
-  const state    = status?.state ?? 'STANDBY'
-  const blocked  = status?.trend_guard_blocked ?? true
-  const isActive = state === 'ACTIVE'
+  const uiState = status?.state ?? 'STANDBY'
+  const display = STATE_DISPLAY[uiState] || STATE_DISPLAY.STANDBY
+  const blocked = status?.trend_guard_blocked ?? true
 
-  const stateColor = isActive ? 'var(--green)' : blocked ? 'var(--amber)' : 'var(--text-3)'
-  const stateDot   = isActive ? 'green' : blocked ? 'amber' : 'grey'
+  // Button enablement is driven by UI state, not the DB flag, so the buttons
+  // actually do something when the user clicks them.
+  //   STANDBY   — can Start (if trend guard not blocking)
+  //   STARTING  — cannot Start (already in progress); Stop will cancel pending activation
+  //   ACTIVE    — can Stop
+  //   PAUSED    — can Stop (cancel orders); Start resumes via flag flip
+  //   STOPPING  — cannot Start/Stop (already in progress)
+  const canStart = !acting && uiState === 'STANDBY' && !blocked
+  const canStop  = !acting && (uiState === 'ACTIVE' || uiState === 'STARTING' || uiState === 'PAUSED')
 
   return (
     <div>
@@ -126,21 +162,26 @@ export default function Grid() {
       {/* State card */}
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-          <div className={`dot ${stateDot}`} />
-          <span style={{ fontSize: 16, fontWeight: 700, color: stateColor }}>{state}</span>
+          <div className={`dot ${display.dot}`} />
+          <span style={{ fontSize: 16, fontWeight: 700, color: display.color }}>{display.label}</span>
           <span style={{ fontSize: 13, color: 'var(--text-3)' }}>
             {status?.pair ?? '—'}
           </span>
-          {!status?.enabled && (
-            <span className="tag" style={{ background: 'rgba(239,68,68,0.1)', color: '#ef4444', marginLeft: 'auto' }}>
-              GRID_ENABLED=false
+          {uiState === 'STARTING' && (
+            <span className="tag" style={{ background: 'rgba(240,180,41,0.15)', color: 'var(--amber)', marginLeft: 'auto' }}>
+              scanner activating...
+            </span>
+          )}
+          {uiState === 'STOPPING' && (
+            <span className="tag" style={{ background: 'rgba(240,180,41,0.15)', color: 'var(--amber)', marginLeft: 'auto' }}>
+              cancelling orders...
             </span>
           )}
         </div>
 
         <RsiGauge rsi={status?.rsi} />
 
-        {blocked && (
+        {blocked && uiState === 'STANDBY' && (
           <div style={{
             padding: '10px 14px', marginBottom: 14,
             background: 'rgba(240,180,41,0.07)',
@@ -156,16 +197,32 @@ export default function Grid() {
           <button
             className="btn btn-amber"
             onClick={doStart}
-            disabled={acting || isActive || !status?.enabled}
+            disabled={!canStart}
+            title={
+              uiState === 'ACTIVE'   ? 'Grid is already active' :
+              uiState === 'STARTING' ? 'Activation already in progress' :
+              uiState === 'STOPPING' ? 'Wait for deactivation to complete' :
+              blocked                ? 'Trend guard is blocking activation' :
+              'Start the grid'
+            }
           >
-            {acting && !isActive ? 'Starting...' : 'Start grid'}
+            {acting && uiState === 'STANDBY' ? 'Requesting...' :
+             uiState === 'STARTING'           ? 'Starting...' :
+             'Start grid'}
           </button>
           <button
             className="btn btn-ghost"
             onClick={doStop}
-            disabled={acting || !isActive}
+            disabled={!canStop}
+            title={
+              uiState === 'STANDBY'  ? 'Grid is not running' :
+              uiState === 'STOPPING' ? 'Deactivation already in progress' :
+              'Stop the grid and cancel open orders'
+            }
           >
-            {acting && isActive ? 'Stopping...' : 'Stop grid'}
+            {acting && uiState !== 'STANDBY' ? 'Requesting...' :
+             uiState === 'STOPPING'           ? 'Stopping...' :
+             'Stop grid'}
           </button>
           <button className="btn btn-ghost btn-sm" onClick={load} style={{ marginLeft: 'auto' }}>
             Refresh
@@ -202,7 +259,7 @@ export default function Grid() {
         />
       </div>
 
-      {/* Range card — only shown when active */}
+      {/* Range card — only shown when there's a live/recent session */}
       {status?.entry_price && (
         <div className="card">
           <div className="card-title">Grid range</div>
@@ -227,17 +284,6 @@ export default function Grid() {
           <div style={{ marginTop: 12, fontSize: 12, color: 'var(--text-3)' }}>
             Price must stay within range for the grid to profit. If price exits the lower bound,
             the risk manager treats the drawdown as a realised loss against the daily limit.
-          </div>
-        </div>
-      )}
-
-      {/* Config note */}
-      {!status?.enabled && (
-        <div className="card" style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 13, color: 'var(--text-2)' }}>
-            Grid trading is disabled. Set{' '}
-            <code style={{ fontSize: 11, background: 'var(--bg-3)', padding: '1px 5px', borderRadius: 3 }}>GRID_ENABLED=true</code>
-            {' '}in Settings → Advanced, then reload this page.
           </div>
         </div>
       )}
