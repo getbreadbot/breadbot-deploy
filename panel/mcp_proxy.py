@@ -111,6 +111,31 @@ async def call_tool(tool_name: str, params: dict = None) -> Any:
 
 # ── read endpoints ────────────────────────────────────────────────────────────
 
+
+def _extract_list(data, *keys):
+    """Pull a list payload out of an MCP tool response.
+
+    MCP tools that return Python lists are wrapped as {"result": [...]}.
+    Older code checked for a tool-specific key ("positions", "yields"...) that
+    FastMCP never actually produces. This helper tries, in order:
+      1. data itself if already a list
+      2. data["result"] if present and a list (the actual MCP shape)
+      3. any of the fallback keys if present and a list (back-compat)
+    Returns [] otherwise.
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        r = data.get("result")
+        if isinstance(r, list):
+            return r
+        for k in keys:
+            v = data.get(k)
+            if isinstance(v, list):
+                return v
+    return []
+
+
 @router.get("/status")
 async def get_status(auth=Depends(verify_session)):
     data = await call_tool("get_status")
@@ -141,14 +166,14 @@ async def get_status(auth=Depends(verify_session)):
 @router.get("/positions")
 async def get_positions(auth=Depends(verify_session)):
     data = await call_tool("get_positions")
-    raw = data if isinstance(data, list) else data.get("positions", []) if isinstance(data, dict) else []
+    raw = _extract_list(data, "positions")
     return {"positions": raw}
 
 
 @router.get("/yields")
 async def get_yields(auth=Depends(verify_session)):
     data = await call_tool("get_yields")
-    raw = data if isinstance(data, list) else data.get("yields", []) if isinstance(data, dict) else []
+    raw = _extract_list(data, "yields")
     platforms = []
     for d in raw:
         if isinstance(d, dict):
@@ -165,7 +190,7 @@ async def get_yields(auth=Depends(verify_session)):
 async def get_alert_history(auth=Depends(verify_session)):
     data = await call_tool("get_alert_history")
     # MCP returns raw DB rows as a list — React expects {"alerts": [...]} with mapped fields
-    raw = data if isinstance(data, list) else data.get("alerts", []) if isinstance(data, dict) else []
+    raw = _extract_list(data, "alerts")
     import json as _jf, time as _t
     from datetime import datetime as _dt
     alerts = []
@@ -330,7 +355,7 @@ async def funding_rates(auth=Depends(verify_session)):
 @router.get("/funding/positions")
 async def funding_positions(auth=Depends(verify_session)):
     data = await call_tool("get_funding_positions")
-    raw = data if isinstance(data, list) else data.get("positions", []) if isinstance(data, dict) else []
+    raw = _extract_list(data, "positions")
     return {"positions": raw}
 
 
