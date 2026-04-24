@@ -30,6 +30,7 @@ New DB tables:
 
 import asyncio
 import logging
+import math
 import os
 import sqlite3
 import time
@@ -79,6 +80,85 @@ RSI_UPPER_BLOCK    = 65.0
 RSI_LOWER_BLOCK    = 35.0
 POLL_INTERVAL      = 60    # seconds between fill-check cycles
 RSI_CANDLE_LIMIT   = 50    # candles fetched for RSI calculation (need 14+)
+
+
+# __ Exchange filter quantization (S68 P1) ___________________________________
+# Binance.US rejects orders whose qty is not an integer multiple of LOT_SIZE
+# stepSize, or whose price is not a tickSize multiple. Error -1013 "Filter
+# failure: LOT_SIZE". Cache filters per symbol on first use.
+
+_FILTER_CACHE: dict[str, dict] = {}
+
+
+def _get_symbol_filters(symbol: str) -> dict:
+    """Return dict with keys: step_size, min_qty, tick_size, min_notional.
+    Cached per symbol. Returns empty dict if exchange info unavailable."""
+    sym = symbol.upper()
+    if sym in _FILTER_CACHE:
+        return _FILTER_CACHE[sym]
+    out: dict = {}
+    try:
+        info = binance.get_exchange_info(sym)
+        symbols = info.get("symbols", []) if isinstance(info, dict) else []
+        if not symbols:
+            log.warning("Exchange info returned no symbol %s", sym)
+            _FILTER_CACHE[sym] = out
+            return out
+        for f in symbols[0].get("filters", []):
+            ftype = f.get("filterType")
+            if ftype == "LOT_SIZE":
+                out["step_size"] = float(f.get("stepSize", 0) or 0)
+                out["min_qty"]   = float(f.get("minQty", 0) or 0)
+            elif ftype == "PRICE_FILTER":
+                out["tick_size"] = float(f.get("tickSize", 0) or 0)
+            elif ftype in ("MIN_NOTIONAL", "NOTIONAL"):
+                mn = f.get("minNotional") or f.get("notional") or 0
+                out["min_notional"] = float(mn or 0)
+    except Exception as exc:
+        log.warning("Failed to fetch exchange filters for %s: %s", sym, exc)
+    _FILTER_CACHE[sym] = out
+    return out
+
+
+def _floor_to_step(value: float, step: float) -> float:
+    """Floor value to the nearest multiple of step."""
+    if step <= 0:
+        return value
+    return math.floor(round(value / step, 10)) * step
+
+
+def _quantize_order(symbol: str, quantity: float, price):
+    """Quantize qty to stepSize (floor) and price to tickSize (floor).
+
+    Returns (qty, price) tuple on success, or None if qty falls below minQty
+    after quantization (caller should skip that level).
+
+    price=None is passed through unchanged (for MARKET orders)."""
+    f = _get_symbol_filters(symbol)
+    step = f.get("step_size", 0)
+    min_qty = f.get("min_qty", 0)
+    tick = f.get("tick_size", 0)
+
+    qty = _floor_to_step(quantity, step) if step > 0 else quantity
+    if min_qty > 0 and qty < min_qty:
+        log.warning(
+            "Quantized qty %.10f below minQty %.10f for %s (raw=%.10f step=%s); "
+            "skipping order",
+            qty, min_qty, symbol, quantity, step,
+        )
+        return None
+    if step > 0:
+        decimals = max(0, -int(round(math.log10(step)))) if step < 1 else 0
+        qty = round(qty, decimals)
+
+    out_price = price
+    if price is not None and tick > 0:
+        out_price = _floor_to_step(price, tick)
+        decimals = max(0, -int(round(math.log10(tick)))) if tick < 1 else 0
+        out_price = round(out_price, decimals)
+
+    return qty, out_price
+
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -320,23 +400,34 @@ def place_grid_orders(session: GridSession) -> int:
     """
     Place limit orders for all unfilled levels.
     Returns count of successfully placed orders.
+
+    S68 P1: quantize qty to LOT_SIZE stepSize and price to PRICE_FILTER
+    tickSize before submission. Binance.US rejects non-quantized orders
+    with -1013 "Filter failure: LOT_SIZE".
     """
     placed = 0
     for lvl in session.levels:
         if lvl.order_id or lvl.filled:
             continue
+        q = _quantize_order(session.pair, lvl.quantity, lvl.price)
+        if q is None:
+            continue
+        qty_q, price_q = q
         try:
             result = binance.place_order(
                 symbol     = session.pair,
                 side       = lvl.side,
                 order_type = "LIMIT",
-                quantity   = lvl.quantity,
-                price      = lvl.price,
+                quantity   = qty_q,
+                price      = price_q,
             )
             lvl.order_id = result.get("orderId")
+            lvl.quantity = qty_q
+            if price_q is not None:
+                lvl.price = price_q
             placed += 1
-            log.info("Grid order placed: %s %.6f @ %.2f orderId=%s",
-                     lvl.side, lvl.quantity, lvl.price, lvl.order_id)
+            log.info("Grid order placed: %s %.8f @ %.2f orderId=%s",
+                     lvl.side, qty_q, price_q or 0.0, lvl.order_id)
         except Exception as exc:
             log.warning("Failed to place grid order %.2f %s: %s",
                         lvl.price, lvl.side, exc)
@@ -380,13 +471,21 @@ def on_order_fill(session: GridSession, filled_level: GridLevel) -> Optional[Gri
         # Place sell at next level up
         if idx + 1 < len(levels):
             counter = levels[idx + 1]
+            q = _quantize_order(session.pair, filled_level.quantity, counter.price)
+            if q is None:
+                log.warning("Counter SELL skipped - qty below minQty after quantize")
+                return None
+            qty_q, price_q = q
             try:
                 result = binance.place_order(
                     session.pair, "SELL", "LIMIT",
-                    filled_level.quantity, counter.price,
+                    qty_q, price_q,
                 )
                 counter.order_id = result.get("orderId")
                 counter.filled   = False
+                counter.quantity = qty_q
+                if price_q is not None:
+                    counter.price = price_q
                 log.info("Counter SELL placed @ %.2f after BUY fill @ %.2f",
                          counter.price, filled_level.price)
                 return counter
@@ -405,13 +504,21 @@ def on_order_fill(session: GridSession, filled_level: GridLevel) -> Optional[Gri
             log.info("Cycle complete: buy=%.2f sell=%.2f qty=%.6f net=%.4f total=%.4f",
                      buy_level.price, filled_level.price,
                      filled_level.quantity, net, session.total_profit)
+            q = _quantize_order(session.pair, filled_level.quantity, buy_level.price)
+            if q is None:
+                log.warning("Counter BUY skipped - qty below minQty after quantize")
+                return None
+            qty_q, price_q = q
             try:
                 result = binance.place_order(
                     session.pair, "BUY", "LIMIT",
-                    filled_level.quantity, buy_level.price,
+                    qty_q, price_q,
                 )
                 buy_level.order_id = result.get("orderId")
                 buy_level.filled   = False
+                buy_level.quantity = qty_q
+                if price_q is not None:
+                    buy_level.price = price_q
                 return buy_level
             except Exception as exc:
                 log.warning("Counter BUY failed: %s", exc)

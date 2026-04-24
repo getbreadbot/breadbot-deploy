@@ -32,6 +32,7 @@ New DB tables:
 
 import asyncio
 import logging
+import math
 import os
 import sqlite3
 import time
@@ -89,6 +90,87 @@ ARB_EXCHANGE       = os.getenv("FUNDING_ARB_EXCHANGE", "bybit").lower()
 
 CONSECUTIVE_EXIT   = 3       # close after this many consecutive periods below exit threshold
 POLL_INTERVAL      = 3600    # check fills + rates every hour (funding is every 8h)
+
+
+# __ Exchange filter quantization (S68 P2) ___________________________________
+# Duplicated from grid_engine.py (S68 P1). Binance.US rejects orders whose qty
+# is not an integer multiple of LOT_SIZE stepSize. MARKET orders bypass the
+# tickSize check (no limit price) but LOT_SIZE + MIN_NOTIONAL still apply.
+# Future cleanup: consolidate into binance_connector.place_order_quantized().
+
+_FILTER_CACHE: dict[str, dict] = {}
+
+
+def _get_symbol_filters(symbol: str) -> dict:
+    """Return dict with step_size, min_qty, tick_size, min_notional.
+    Cached per symbol."""
+    sym = symbol.upper()
+    if sym in _FILTER_CACHE:
+        return _FILTER_CACHE[sym]
+    out: dict = {}
+    try:
+        info = binance.get_exchange_info(sym)
+        symbols = info.get("symbols", []) if isinstance(info, dict) else []
+        if not symbols:
+            log.warning("Exchange info returned no symbol %s", sym)
+            _FILTER_CACHE[sym] = out
+            return out
+        for f in symbols[0].get("filters", []):
+            ftype = f.get("filterType")
+            if ftype == "LOT_SIZE":
+                out["step_size"] = float(f.get("stepSize", 0) or 0)
+                out["min_qty"]   = float(f.get("minQty", 0) or 0)
+            elif ftype == "PRICE_FILTER":
+                out["tick_size"] = float(f.get("tickSize", 0) or 0)
+            elif ftype in ("MIN_NOTIONAL", "NOTIONAL"):
+                mn = f.get("minNotional") or f.get("notional") or 0
+                out["min_notional"] = float(mn or 0)
+    except Exception as exc:
+        log.warning("Failed to fetch exchange filters for %s: %s", sym, exc)
+    _FILTER_CACHE[sym] = out
+    return out
+
+
+def _floor_to_step(value: float, step: float) -> float:
+    if step <= 0:
+        return value
+    return math.floor(round(value / step, 10)) * step
+
+
+def _quantize_qty(symbol: str, quantity: float, reference_price: float = 0.0):
+    """Quantize qty to LOT_SIZE stepSize and validate against MIN_NOTIONAL.
+
+    For MARKET orders, pass the current ticker mid-price as reference_price so
+    we can validate notional before submission. Returns quantized qty on
+    success, None if below minQty or minNotional."""
+    f = _get_symbol_filters(symbol)
+    step = f.get("step_size", 0)
+    min_qty = f.get("min_qty", 0)
+    min_notional = f.get("min_notional", 0)
+
+    qty = _floor_to_step(quantity, step) if step > 0 else quantity
+    if min_qty > 0 and qty < min_qty:
+        log.warning(
+            "Quantized qty %.10f below minQty %.10f for %s (raw=%.10f step=%s); skipping",
+            qty, min_qty, symbol, quantity, step,
+        )
+        return None
+    if step > 0:
+        decimals = max(0, -int(round(math.log10(step)))) if step < 1 else 0
+        qty = round(qty, decimals)
+
+    if min_notional > 0 and reference_price > 0:
+        notional = qty * reference_price
+        if notional < min_notional:
+            log.warning(
+                "Quantized notional $%.4f below minNotional $%.4f for %s "
+                "(qty=%s price=%.2f); skipping",
+                notional, min_notional, symbol, qty, reference_price,
+            )
+            return None
+
+    return qty
+
 
 
 # ── Data types ────────────────────────────────────────────────────────────────
@@ -382,11 +464,17 @@ def open_pair_trade(pair: str) -> Optional[FundingPosition]:
         return _open_pair_drift(pair, entry_price, quantity)
 
     # ── Bybit / Binance.US path ────────────────────────────────────────────────
-    # Leg 1: spot BUY on Binance.US
+    # Leg 1: spot BUY on Binance.US (S68 P2: quantize qty to LOT_SIZE stepSize)
+    qty_q = _quantize_qty(spot_symbol, quantity, reference_price=entry_price)
+    if qty_q is None:
+        log.critical("SPOT LEG FAILED for %s: qty %s fails LOT_SIZE/MIN_NOTIONAL — aborting pair", pair, quantity)
+        return None
+    # Persist quantized qty so the perp leg + close path use the same value.
+    quantity = qty_q
     try:
         spot_result   = binance.place_order(spot_symbol, "BUY", "MARKET", quantity)
         spot_order_id = str(spot_result.get("orderId", ""))
-        log.info("Spot BUY placed: %s orderId=%s", spot_symbol, spot_order_id)
+        log.info("Spot BUY placed: %s qty=%s orderId=%s", spot_symbol, quantity, spot_order_id)
     except Exception as exc:
         log.critical("SPOT LEG FAILED for %s: %s — no perp placed, position is flat", pair, exc)
         return None
@@ -614,12 +702,16 @@ def close_pair_trade(pos: FundingPosition, reason: str) -> float:
             log.error("CFM perp close failed for %s: %s", pos.pair, exc)
     else:
         # ── Default: Bybit / Binance.US close path ─────────────────────────────
-        # Spot SELL
-        try:
-            binance.place_order(pos.spot_symbol, "SELL", "MARKET", pos.quantity)
-            log.info("Spot SELL executed: %s qty=%.6f", pos.spot_symbol, pos.quantity)
-        except Exception as exc:
-            log.error("Spot close failed for %s: %s", pos.pair, exc)
+        # Spot SELL (S68 P2: quantize in case pos.quantity drifted vs current filters)
+        close_qty = _quantize_qty(pos.spot_symbol, pos.quantity, reference_price=pos.entry_price)
+        if close_qty is None:
+            log.error("Spot close skipped for %s: qty %s fails LOT_SIZE/MIN_NOTIONAL", pos.pair, pos.quantity)
+        else:
+            try:
+                binance.place_order(pos.spot_symbol, "SELL", "MARKET", close_qty)
+                log.info("Spot SELL executed: %s qty=%s", pos.spot_symbol, close_qty)
+            except Exception as exc:
+                log.error("Spot close failed for %s: %s", pos.pair, exc)
 
         # Perp BUY (close short)
         try:
