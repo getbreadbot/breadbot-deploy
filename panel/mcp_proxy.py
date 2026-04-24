@@ -163,11 +163,88 @@ async def get_status(auth=Depends(verify_session)):
     return data
 
 
+async def _fetch_live_prices(tokens_by_chain: dict) -> dict:
+    """Batch fetch live USD prices from DEXScreener, grouped by chain.
+    tokens_by_chain: {"solana": ["addr1","addr2"], "base": [...]}
+    Returns: {"addr": price_usd, ...}. Missing/failed tokens are omitted.
+    Uses the pair with highest USD liquidity when multiple exist.
+    """
+    prices = {}
+    async with httpx.AsyncClient(timeout=6) as c:
+        for chain, addrs in tokens_by_chain.items():
+            if not addrs:
+                continue
+            # DEXScreener accepts up to 30 addresses comma-separated
+            url = f"https://api.dexscreener.com/latest/dex/tokens/{','.join(addrs[:30])}"
+            try:
+                r = await c.get(url)
+                if r.status_code != 200:
+                    continue
+                pairs = r.json().get("pairs") or []
+                # Group pairs by baseToken address, pick highest-liquidity pair per token
+                by_token = {}
+                for p in pairs:
+                    base = (p.get("baseToken") or {}).get("address", "").lower()
+                    if not base:
+                        continue
+                    liq = (p.get("liquidity") or {}).get("usd") or 0
+                    if base not in by_token or liq > by_token[base][0]:
+                        try:
+                            by_token[base] = (liq, float(p.get("priceUsd") or 0))
+                        except (ValueError, TypeError):
+                            pass
+                for addr in addrs:
+                    v = by_token.get(addr.lower())
+                    if v and v[1] > 0:
+                        prices[addr] = v[1]
+            except Exception:
+                continue
+    return prices
+
+
 @router.get("/positions")
 async def get_positions(auth=Depends(verify_session)):
     data = await call_tool("get_positions")
     raw = _extract_list(data, "positions")
-    return {"positions": raw}
+
+    # Group open positions by chain for batched price fetch
+    tokens_by_chain = {}
+    for p in raw:
+        addr = p.get("token_addr")
+        chain = (p.get("chain") or "").lower()
+        if addr and chain:
+            tokens_by_chain.setdefault(chain, []).append(addr)
+
+    prices = await _fetch_live_prices(tokens_by_chain) if tokens_by_chain else {}
+
+    mapped = []
+    for p in raw:
+        entry = float(p.get("entry_price") or 0)
+        qty   = float(p.get("quantity") or 0)
+        cost  = float(p.get("cost_basis_usd") or 0)
+        cur   = prices.get(p.get("token_addr"))
+        value_usd = (cur * qty) if (cur and qty) else None
+        pnl_usd   = (value_usd - cost) if (value_usd is not None) else None
+        mapped.append({
+            "id":            p.get("id"),
+            "token":         p.get("token_name") or p.get("symbol") or "?",
+            "symbol":        p.get("symbol"),
+            "contract":      p.get("token_addr"),
+            "chain":         p.get("chain"),
+            "entry_price":   entry or None,
+            "current_price": cur,
+            "stop_loss":     p.get("stop_loss_usd"),
+            "take_profit_25":p.get("take_profit_25"),
+            "take_profit_50":p.get("take_profit_50"),
+            "quantity":      qty or None,
+            "cost_basis":    cost or None,
+            "value_usd":     value_usd,
+            "pnl_usd":       pnl_usd,
+            "opened_at":     p.get("opened_at"),
+            "status":        p.get("status"),
+            "exchange":      p.get("exchange"),
+        })
+    return {"positions": mapped}
 
 
 @router.get("/yields")
