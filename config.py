@@ -67,6 +67,21 @@ def _str_config(db_key: str, env_key: str, default: str = "") -> str:
         return env_val
     return default
 
+_TRUE_VALUES = {"1", "true", "yes", "on", "auto"}
+
+def _bool_config(db_key: str, env_key: str, default: bool = False) -> bool:
+    """Check bot_config DB first, then .env, then default.
+    Any value in {1, true, yes, on, auto} (case-insensitive) is True, else False.
+    Re-reads every call — safe to use inside long-running loops for
+    runtime toggling from the panel without restart."""
+    db_val = _db_get(db_key)
+    if db_val:
+        return db_val.strip().lower() in _TRUE_VALUES
+    env_val = os.getenv(env_key, "").strip().lower()
+    if env_val:
+        return env_val in _TRUE_VALUES
+    return default
+
 # ── Telegram ──────────────────────────────────────────────
 TELEGRAM_BOT_TOKEN  = _str_config("telegram_bot_token", "TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID    = _str_config("telegram_chat_id",   "TELEGRAM_CHAT_ID")

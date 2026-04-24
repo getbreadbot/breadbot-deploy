@@ -71,6 +71,16 @@ TELEGRAM_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ARB_ENABLED        = os.getenv("FUNDING_ARB_ENABLED",          "false").lower() == "true"
+
+
+def is_enabled() -> bool:
+    """Runtime-fresh read of the funding_arb_enabled flag.
+    Priority: bot_config DB > FUNDING_ARB_ENABLED env > False."""
+    try:
+        from config import _bool_config
+        return _bool_config("funding_arb_enabled", "FUNDING_ARB_ENABLED", default=False)
+    except Exception:
+        return ARB_ENABLED
 ARB_PAIRS          = [p.strip().upper() for p in os.getenv("FUNDING_ARB_PAIRS", "BTC,ETH").split(",")]
 ENTRY_THRESHOLD    = float(os.getenv("FUNDING_RATE_ENTRY_THRESHOLD", "0.01"))   # % per 8h
 EXIT_THRESHOLD     = float(os.getenv("FUNDING_RATE_EXIT_THRESHOLD",  "0.005"))  # % per 8h
@@ -726,7 +736,9 @@ class FundingArbEngine:
         collect estimated funding, check exit conditions on open positions.
         Called every POLL_INTERVAL seconds.
         """
-        if not ARB_ENABLED:
+        # Outer loop already gates on is_enabled(); keep this as a
+        # safety no-op in case evaluate_and_act is ever called directly.
+        if not is_enabled():
             return
 
         rates     = get_funding_rates(ARB_PAIRS)
@@ -786,16 +798,25 @@ class FundingArbEngine:
 
 async def funding_arb_loop(engine: FundingArbEngine) -> None:
     """Runs alongside scanner. Evaluates rates and acts every POLL_INTERVAL seconds."""
-    if not ARB_ENABLED:
-        log.info("Funding arb engine disabled (FUNDING_ARB_ENABLED=false)")
-        return
-
+    # Engine loop runs forever. is_enabled() is checked each tick so the
+    # panel can toggle the strategy on/off at runtime without a restart.
     log.info(
-        "Funding arb loop started | pairs=%s entry=%.4f%% exit=%.4f%% alloc=%.0f%%",
-        ARB_PAIRS, ENTRY_THRESHOLD, EXIT_THRESHOLD, ALLOCATION_PCT * 100,
+        "Funding arb loop started | pairs=%s entry=%.4f%% exit=%.4f%% alloc=%.0f%% initially_enabled=%s",
+        ARB_PAIRS, ENTRY_THRESHOLD, EXIT_THRESHOLD, ALLOCATION_PCT * 100, is_enabled(),
     )
+    _was_enabled = None
     async with httpx.AsyncClient() as client:
         while True:
+            _now_enabled = is_enabled()
+            if _now_enabled != _was_enabled:
+                if _now_enabled:
+                    log.info("Funding arb engine ENABLED — resuming")
+                else:
+                    log.info("Funding arb engine DISABLED — standing by (toggle from panel to resume)")
+                _was_enabled = _now_enabled
+            if not _now_enabled:
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
             try:
                 await engine.evaluate_and_act(client)
             except Exception as exc:

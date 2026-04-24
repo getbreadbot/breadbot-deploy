@@ -44,6 +44,16 @@ TELEGRAM_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 REBALANCE_ENABLED   = os.getenv("YIELD_REBALANCE_ENABLED",  "false").lower() == "true"
+
+
+def is_enabled() -> bool:
+    """Runtime-fresh read of the yield_rebalance_enabled flag.
+    Priority: bot_config DB > YIELD_REBALANCE_ENABLED env > False."""
+    try:
+        from config import _bool_config
+        return _bool_config("yield_rebalance_enabled", "YIELD_REBALANCE_ENABLED", default=False)
+    except Exception:
+        return REBALANCE_ENABLED
 REBALANCE_MODE      = os.getenv("YIELD_REBALANCE_MODE",     "alert").lower()
 THRESHOLD_PCT       = float(os.getenv("REBALANCE_THRESHOLD_PCT",    "1.5"))
 MIN_AMOUNT_USD      = float(os.getenv("REBALANCE_MIN_AMOUNT_USD",   "500"))
@@ -414,18 +424,29 @@ async def rebalancer_loop() -> None:
     Check interval matches yield monitor (1 hour). No separate cron needed —
     import and call from the same async entry point as yield_monitor.
     """
-    if not REBALANCE_ENABLED:
-        log.info("Yield rebalancer disabled (YIELD_REBALANCE_ENABLED=false)")
-        return
-
+    # Engine loop runs forever. is_enabled() is checked each tick so the
+    # panel can toggle the strategy on/off at runtime without a restart.
     ensure_rebalance_table()
     log.info(
-        "Yield rebalancer started — mode=%s threshold=%.1f%% min_amount=$%.0f",
-        REBALANCE_MODE, THRESHOLD_PCT, MIN_AMOUNT_USD,
+        "Yield rebalancer started — mode=%s threshold=%.1f%% min_amount=$%.0f initially_enabled=%s",
+        REBALANCE_MODE, THRESHOLD_PCT, MIN_AMOUNT_USD, is_enabled(),
     )
+    _was_enabled = None
 
     async with httpx.AsyncClient() as client:
         while True:
+            _now_enabled = is_enabled()
+            if _now_enabled != _was_enabled:
+                if _now_enabled:
+                    log.info("Yield rebalancer ENABLED — resuming")
+                else:
+                    log.info("Yield rebalancer DISABLED — standing by (toggle from panel to resume)")
+                _was_enabled = _now_enabled
+            if not _now_enabled:
+                # Rebalancer ticks hourly; sleep CHECK_INTERVAL when idle
+                import asyncio as _a
+                await _a.sleep(300)  # check flag every 5min when disabled
+                continue
             try:
                 rates = db_get_latest_rates()
                 opp   = find_best_opportunity(rates)

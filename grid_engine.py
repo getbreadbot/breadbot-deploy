@@ -54,6 +54,19 @@ TELEGRAM_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 # ── Config ────────────────────────────────────────────────────────────────────
 GRID_ENABLED       = os.getenv("GRID_ENABLED",        "false").lower() == "true"
+
+
+def is_enabled() -> bool:
+    """Runtime-fresh read of the grid_enabled flag.
+    Priority: bot_config DB > GRID_ENABLED env > False.
+    Safe to call inside the engine loop — the panel can toggle this
+    from the Strategies page without a bot restart."""
+    try:
+        from config import _bool_config
+        return _bool_config("grid_enabled", "GRID_ENABLED", default=False)
+    except Exception:
+        # Fallback to module constant if config import ever fails
+        return GRID_ENABLED
 GRID_PAIR          = os.getenv("GRID_PAIR",            "BTC/USDT").upper().replace("/", "")
 GRID_UPPER_PCT     = float(os.getenv("GRID_UPPER_PCT",       "10"))
 GRID_LOWER_PCT     = float(os.getenv("GRID_LOWER_PCT",       "10"))
@@ -483,8 +496,8 @@ class GridEngine:
         if self._state == GridState.ACTIVE:
             return "Grid is already active."
 
-        if not GRID_ENABLED:
-            return "Grid trading is disabled. Set GRID_ENABLED=true in .env to enable."
+        if not is_enabled():
+            return "Grid trading is disabled. Enable from the Strategies page, or set GRID_ENABLED=true in .env."
 
         # Trend guard check
         blocked, rsi = trend_guard(GRID_PAIR)
@@ -650,15 +663,27 @@ async def grid_loop(engine: GridEngine) -> None:
     Runs alongside scanner. Checks fills and boundary every POLL_INTERVAL seconds.
     Also re-evaluates trend guard every 4 hours when in PAUSED state.
     """
-    if not GRID_ENABLED:
-        log.info("Grid engine disabled (GRID_ENABLED=false)")
-        return
-
-    log.info("Grid engine loop started (pair=%s interval=%ds)", GRID_PAIR, POLL_INTERVAL)
+    # Engine loop runs forever. is_enabled() is checked each tick so the
+    # panel can toggle the strategy on/off at runtime without a restart.
+    log.info("Grid engine loop started (pair=%s interval=%ds, initially_enabled=%s)",
+             GRID_PAIR, POLL_INTERVAL, is_enabled())
     last_rsi_check = 0.0
+    _was_enabled = None  # tracks enabled state across ticks for transition logging
 
     async with httpx.AsyncClient() as client:
         while True:
+            # Runtime enable check
+            _now_enabled = is_enabled()
+            if _now_enabled != _was_enabled:
+                if _now_enabled:
+                    log.info("Grid engine ENABLED — resuming trading logic")
+                else:
+                    log.info("Grid engine DISABLED — standing by (toggle from panel to resume)")
+                _was_enabled = _now_enabled
+            if not _now_enabled:
+                await asyncio.sleep(POLL_INTERVAL)
+                continue
+
             try:
                 await engine.check_fills()
 

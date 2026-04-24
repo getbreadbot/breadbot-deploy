@@ -36,6 +36,16 @@ log = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 PENDLE_ENABLED      = os.getenv("PENDLE_ENABLED",       "false").lower() == "true"
+
+
+def is_enabled() -> bool:
+    """Runtime-fresh read of the pendle_enabled flag.
+    Priority: bot_config DB > PENDLE_ENABLED env > False."""
+    try:
+        from config import _bool_config
+        return _bool_config("pendle_enabled", "PENDLE_ENABLED", default=False)
+    except Exception:
+        return PENDLE_ENABLED
 PENDLE_CHAIN        = os.getenv("PENDLE_CHAIN",          "base").lower()
 PENDLE_MIN_RATE     = float(os.getenv("PENDLE_MIN_RATE",         "4.0"))
 PENDLE_MAX_TERM     = int(os.getenv("PENDLE_MAX_TERM_DAYS",      "180"))
@@ -48,7 +58,7 @@ _REQUEST_TIMEOUT = 12
 _PENDLE_ROUTER = "0x888888888889758F76e7103c6CbF23ABbF58F946"
 
 # Stablecoin keywords — used to filter markets to USD/stablecoin only
-_STABLE_KEYWORDS = {"usd", "usdc", "usdt", "dai", "frax", "susd", "yousd", "yousd"}
+_STABLE_KEYWORDS = {"usd", "usdc", "usdt", "dai", "frax", "susd", "yousd", "bill", "tbill", "ondo"}
 
 
 # ── Data types ────────────────────────────────────────────────────────────────
@@ -102,19 +112,23 @@ def get_available_markets(
     chain         = (chain or PENDLE_CHAIN).lower()
     min_rate      = min_rate      if min_rate      is not None else PENDLE_MIN_RATE
     max_term_days = max_term_days if max_term_days is not None else PENDLE_MAX_TERM
-    chain_id      = _CHAIN_IDS.get(chain)
 
-    if not chain_id:
-        raise ValueError(f"Unsupported chain: {chain}. Use 'base' or 'arbitrum'.")
-
-    url = f"{_PENDLE_API}/{chain_id}/markets"
-    try:
-        resp = requests.get(url, params={"limit": 50, "is_expired": "false"},
-                            timeout=_REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        raw_markets = resp.json().get("results", [])
-    except Exception as exc:
-        raise RuntimeError(f"Pendle API error: {exc}") from exc
+    # Query both Base and Arbitrum — stablecoin liquidity moves between chains.
+    # Deduplicate by market address in case of cross-chain listings.
+    chains_to_query = list(_CHAIN_IDS.keys())  # always query all supported chains
+    raw_markets: list[dict] = []
+    for c in chains_to_query:
+        c_id = _CHAIN_IDS[c]
+        url = f"{_PENDLE_API}/{c_id}/markets"
+        try:
+            resp = requests.get(url, params={"limit": 50, "is_expired": "false"},
+                                timeout=_REQUEST_TIMEOUT)
+            resp.raise_for_status()
+            for m in resp.json().get("results", []):
+                m["_chain"] = c  # tag each market with its chain
+                raw_markets.append(m)
+        except Exception as exc:
+            log.warning("Pendle API error on %s: %s", c, exc)
 
     now     = datetime.now(timezone.utc)
     markets = []
@@ -160,7 +174,7 @@ def get_available_markets(
                 expiry         = expiry,
                 days_to_expiry = days_left,
                 liquidity_usd  = liquidity,
-                chain          = chain,
+                chain          = m.get("_chain", chain),
             ))
 
         except Exception as exc:
@@ -169,8 +183,8 @@ def get_available_markets(
 
     markets.sort(key=lambda x: x.fixed_apy, reverse=True)
     log.info(
-        "Pendle markets on %s: %d qualifying (min_rate=%.1f%% max_term=%dd)",
-        chain, len(markets), min_rate, max_term_days,
+        "Pendle markets (base+arbitrum): %d qualifying (min_rate=%.1f%% max_term=%dd)",
+        len(markets), min_rate, max_term_days,
     )
     return markets
 
