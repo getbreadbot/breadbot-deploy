@@ -281,12 +281,46 @@ def _sell_base(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -
         return False, 0.0, "EXCEPTION"
 
 
+def _record_partial_realization(position_id: int, partial_pnl: float) -> None:
+    """S63 P1: book a TP25 partial gain/loss without closing the position.
+
+    Adds `partial_pnl` to positions.realized_pnl_usd (accumulating, not
+    replacing) and to today's daily_summary row. Position status stays 'open'.
+    trades_count is NOT incremented — the close will do that, so one round-trip
+    counts as one trade in the summary.
+    """
+    conn = _db_rw()
+    try:
+        conn.execute(
+            """UPDATE positions
+                  SET realized_pnl_usd = COALESCE(realized_pnl_usd, 0) + ?
+                WHERE id=?""",
+            (float(partial_pnl), position_id),
+        )
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        conn.execute(
+            """INSERT INTO daily_summary (date, realized_pnl, trades_count)
+               VALUES (?, ?, 0)
+               ON CONFLICT(date) DO UPDATE SET
+                   realized_pnl = realized_pnl + excluded.realized_pnl""",
+            (today, float(partial_pnl)),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = None, exit_price: float | None = None) -> None:
     """Mark position closed and upsert realized_pnl into daily_summary atomically.
 
     S55 P0: daily_summary had no writer since mid-March, disabling the
     daily loss circuit breaker. realized_pnl is written in the same
     transaction as the positions UPDATE so they cannot drift.
+
+    S63 P1: realized_pnl passed in here is the CLOSING LEG only (whole position
+    if no prior TP25, or remaining 50% if TP25 already fired). It is *added*
+    to positions.realized_pnl_usd rather than overwriting, so a TP25 partial
+    previously booked via _record_partial_realization is preserved.
     """
     conn = _db_rw()
     try:
@@ -294,7 +328,7 @@ def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = 
             """UPDATE positions
                   SET status='closed',
                       closed_at=datetime('now'),
-                      realized_pnl_usd = COALESCE(?, realized_pnl_usd),
+                      realized_pnl_usd = COALESCE(realized_pnl_usd, 0) + COALESCE(?, 0),
                       exit_price       = COALESCE(?, exit_price)
                 WHERE id=?""",
             (realized_pnl, exit_price, position_id),
@@ -368,7 +402,12 @@ def _evaluate_position(row: dict) -> None:
         return
 
     pct_vs_entry = ((price - entry) / entry) * 100
-    partial_done = _partial_taken.get(pid, False)
+    # S63 P0: source of truth for "TP25 already fired" is positions.realized_pnl_usd,
+    # not the in-memory _partial_taken dict. Dict survives only within one bot
+    # process; DB survives restarts. If realized_pnl_usd > 0 on an open position,
+    # the TP25 leg has already been booked and only 50% of cost remains.
+    already_realized = float(row.get("realized_pnl_usd") or 0)
+    partial_done = already_realized > 0 or _partial_taken.get(pid, False)
 
     # S62 P1: SL arming delay. For the first 120 seconds after entry, skip SL
     # checks. Rationale: pullback-monitor buys execute into steep downdrafts
@@ -429,7 +468,10 @@ def _evaluate_position(row: dict) -> None:
             "Position #%d %s: %s triggered but wallet holds 0 of this mint — marking closed as dust",
             pid, symbol, action,
         )
-        _mark_closed(pid, note=f"{action}, zero wallet balance", realized_pnl=-cost)
+        # S63 P0: if TP25 already fired, only the remaining 50% of cost
+        # is still allocated to this position. Booking -cost would double-charge.
+        remaining_cost = cost * 0.5 if partial_done else cost
+        _mark_closed(pid, note=f"{action}, zero wallet balance", realized_pnl=-remaining_cost)
         return
 
     sell_raw = int(wallet_raw * sell_fraction) if sell_fraction < 1.0 else wallet_raw
@@ -485,7 +527,15 @@ def _evaluate_position(row: dict) -> None:
         )
         return
 
-    realized_pnl = (usdc_out if sell_fraction == 1.0 else usdc_out) - (cost * sell_fraction)
+    # S63 P0: pnl math must reflect *remaining* cost basis, not full cost.
+    # Old formula `usdc_out - (cost * sell_fraction)` was wrong on TP50-after-TP25
+    # and SL-after-TP25 paths: when TP25 already sold 50% of the wallet, only
+    # 50% of cost is still allocated to the remaining position, but the old
+    # formula billed the whole `cost` against the TP50/SL proceeds, turning
+    # +75% winners into booked losses (see #42 UNCTRUMP, #43 Untweeney).
+    remaining_cost_fraction = 0.5 if partial_done else 1.0
+    cost_attributed = cost * remaining_cost_fraction * sell_fraction
+    realized_pnl = usdc_out - cost_attributed
     _send_telegram(
         f"🔔 *Position Manager*: {action} exit — {symbol} (#{pid})\n"
         f"price=${price:.9f} entry=${entry:.9f} ({pct_vs_entry:+.1f}%)\n"
@@ -494,9 +544,22 @@ def _evaluate_position(row: dict) -> None:
     )
 
     if action == "TP25" and sell_fraction < 1.0:
+        # S63 P1: persist the partial realization. Position stays open, but
+        # realized_pnl_usd and daily_summary get the TP25 leg now so that
+        # (a) the daily loss cap sees accurate state, (b) if the bot restarts
+        # before TP50/SL, the remaining leg computes against correct cost,
+        # and (c) realized pnl isn't lost if the position later closes via
+        # the zero-wallet or dust path.
+        _record_partial_realization(pid, realized_pnl)
         _partial_taken[pid] = True
-        log.info("Position #%d %s: TP25 partial complete, position remains open for TP50/SL", pid, symbol)
+        log.info(
+            "Position #%d %s: TP25 partial complete (realized=$%+.2f), position remains open for TP50/SL",
+            pid, symbol, realized_pnl,
+        )
     else:
+        # For TP50/SL after a TP25 partial, realized_pnl here is only the
+        # second-leg gain/loss; the first leg was already booked on TP25.
+        # _mark_closed adds to realized_pnl_usd incrementally (see below).
         _mark_closed(pid, note=action, realized_pnl=realized_pnl, exit_price=price)
 
 
@@ -506,7 +569,8 @@ def _load_open_positions() -> list[dict]:
         cur = conn.execute(
             """SELECT id, chain, token_addr, token_name, symbol, entry_price,
                       quantity, cost_basis_usd, stop_loss_usd, take_profit_25,
-                      take_profit_50, exchange, opened_at
+                      take_profit_50, exchange, opened_at,
+                      COALESCE(realized_pnl_usd, 0) AS realized_pnl_usd
                FROM positions WHERE status='open'"""
         )
         cols = [d[0] for d in cur.description]
