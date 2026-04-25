@@ -517,6 +517,40 @@ async def add_channel(payload: AddChannelPayload, auth=Depends(verify_session)):
 
 # ── Grid trading ──────────────────────────────────────────────────────────────
 
+def _set_grid_flag(value: bool) -> bool:
+    """S68 P3: flip bot_config.grid_enabled in the main cryptobot DB.
+
+    Scanner's grid_loop polls is_enabled() every POLL_INTERVAL (~60s) and
+    auto-dispatches engine.start()/stop() on transition. Writing here is the
+    panel entry point for grid control.
+
+    Returns True on success, False on any DB error (logged)."""
+    import sqlite3, os
+    from datetime import datetime, timezone
+    # Walk up: panel/ -> breadbot/ -> data/cryptobot.db
+    here = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.normpath(os.path.join(here, "..", "data", "cryptobot.db"))
+    try:
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        conn = sqlite3.connect(db_path, timeout=10)
+        try:
+            conn.execute(
+                "INSERT OR REPLACE INTO bot_config (key, value, updated_at) "
+                "VALUES (?, ?, ?)",
+                ("grid_enabled", "true" if value else "false", now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        return True
+    except Exception as exc:
+        import logging
+        logging.getLogger(__name__).warning(
+            "panel: failed to write grid_enabled=%s: %s", value, exc
+        )
+        return False
+
+
 @router.get("/grid/status")
 async def grid_status(auth=Depends(verify_session)):
     return await call_tool("get_grid_status")
@@ -524,12 +558,32 @@ async def grid_status(auth=Depends(verify_session)):
 
 @router.post("/grid/start")
 async def grid_start(auth=Depends(verify_session)):
-    return await call_tool("grid_command", {"subcommand": "start"})
+    """S68 P3: flip DB flag. Scanner detects transition within ~60s and
+    calls engine.start() in-process. Returns immediate status for UI feedback."""
+    ok = _set_grid_flag(True)
+    if not ok:
+        return {"status": "error", "message": "Failed to write grid_enabled flag to DB"}
+    status = await call_tool("get_grid_status")
+    return {
+        "status": "pending",
+        "message": "Activation requested — scanner will start grid within ~60s. Watch status for ACTIVE state.",
+        "current": status,
+    }
 
 
 @router.post("/grid/stop")
 async def grid_stop(auth=Depends(verify_session)):
-    return await call_tool("grid_command", {"subcommand": "stop"})
+    """S68 P3: flip DB flag. Scanner detects transition within ~60s and
+    calls engine.stop() in-process, cancelling all open orders."""
+    ok = _set_grid_flag(False)
+    if not ok:
+        return {"status": "error", "message": "Failed to write grid_enabled flag to DB"}
+    status = await call_tool("get_grid_status")
+    return {
+        "status": "pending",
+        "message": "Deactivation requested — scanner will stop grid within ~60s and cancel open orders.",
+        "current": status,
+    }
 
 
 # ── Funding rate arb ──────────────────────────────────────────────────────────
@@ -587,19 +641,21 @@ async def strategy_performance(auth=Depends(verify_session)):
 
 @router.get("/pnl/history")
 async def pnl_history(days: int = 30, auth=Depends(verify_session)):
+    # S71 P1: unwrap the {"result": [...]} FastMCP envelope so the frontend
+    # receives a bare list (matches shape used by positions, yields, alerts).
     data = await call_tool("pnl_history", {"days": days})
-    if isinstance(data, list):
-        cumulative = 0
-        for d in data:
-            if isinstance(d, dict):
-                net = d.get("pnl", d.get("net", 0)) or 0
-                cumulative += net
-                d.setdefault("net", net)
-                d.setdefault("realized_pnl", net)
-                d.setdefault("yield_earned", 0)
-                d.setdefault("fees_paid", 0)
-                d.setdefault("cumulative", round(cumulative, 4))
-    return data
+    rows = _extract_list(data, "history", "pnl")
+    cumulative = 0
+    for d in rows:
+        if isinstance(d, dict):
+            net = d.get("pnl", d.get("net", 0)) or 0
+            cumulative += net
+            d.setdefault("net", net)
+            d.setdefault("realized_pnl", net)
+            d.setdefault("yield_earned", 0)
+            d.setdefault("fees_paid", 0)
+            d.setdefault("cumulative", round(cumulative, 4))
+    return rows
 
 @router.delete("/channels/{channel_id}")
 async def remove_channel(channel_id: str, auth=Depends(verify_session)):
