@@ -340,6 +340,10 @@ class GridLevel:
     quantity: float
     order_id: Optional[int] = None
     filled:   bool          = False
+    # S70 Phase A: timestamp captured when this BUY level fills, so the
+    # paired SELL fill can record both legs' timestamps in grid_fills
+    # (needed for tax holding-period classification).
+    buy_filled_at: Optional[str] = None
 
 
 @dataclass
@@ -428,15 +432,27 @@ def db_update_session(session_id: int, state: str,
 
 
 def db_log_fill(session_id: int, pair: str, buy_price: float,
-                 sell_price: float, quantity: float) -> float:
+                 sell_price: float, quantity: float,
+                 buy_filled_at: Optional[str] = None) -> float:
+    """
+    Record a completed buy-sell cycle.
+
+    S70 Phase A: ``buy_filled_at`` is the timestamp of the BUY-side fill that
+    paired with this SELL. When provided, it lets the tax export view compute
+    holding-period (short vs long) for grid trades. When None (e.g. the BUY
+    leg fired before this code shipped), the tax view leaves holding_period
+    NULL for that row.
+    """
     net = round((sell_price - buy_price) * quantity, 6)
     conn = sqlite3.connect(str(DB_PATH))
     try:
         conn.execute("""
             INSERT INTO grid_fills
-              (session_id, pair, buy_price, sell_price, quantity, net_profit)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (session_id, pair, buy_price, sell_price, quantity, net))
+              (session_id, pair, buy_price, sell_price, quantity, net_profit,
+               buy_filled_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (session_id, pair, buy_price, sell_price, quantity, net,
+              buy_filled_at))
         conn.commit()
     finally:
         conn.close()
@@ -626,6 +642,13 @@ def on_order_fill(session: GridSession, filled_level: GridLevel) -> Optional[Gri
     """
     filled_level.filled   = True
     filled_level.order_id = None
+    # S70 Phase A: stamp the BUY fill so the paired SELL can record both
+    # timestamps when the cycle completes (tax holding-period basis).
+    if filled_level.side == "BUY":
+        from datetime import datetime, timezone
+        filled_level.buy_filled_at = datetime.now(timezone.utc).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
     levels = sorted(session.levels, key=lambda x: x.price)
     idx    = next((i for i, l in enumerate(levels) if l.price == filled_level.price), None)
     if idx is None:
@@ -674,6 +697,7 @@ def on_order_fill(session: GridSession, filled_level: GridLevel) -> Optional[Gri
             net = db_log_fill(
                 session.db_id, session.pair,
                 buy_level.price, filled_level.price, filled_level.quantity,
+                buy_filled_at=buy_level.buy_filled_at,
             )
             session.total_profit = round(session.total_profit + net, 6)
             session.cycles      += 1

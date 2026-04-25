@@ -253,15 +253,56 @@ def db_update_funding(pos_id: int, funding_collected: float) -> None:
         conn.close()
 
 
-def db_close_position(pos_id: int, realized_pnl: float, reason: str) -> None:
+def db_log_funding_event(pos_id: int, pair: str, payment_usd: float,
+                          funding_rate: Optional[float] = None) -> None:
+    """
+    S70 Phase A: emit one row per funding payment received.
+
+    Funding income is taxed as ordinary income on Schedule 1, separate
+    from the spot-trade capital gain/loss on Form 8949. The tax export
+    needs a stream of payments, not just a running counter, so the
+    reporting can produce one income row per payment date.
+
+    Tolerates a missing table at runtime — the schema is created by
+    tax_schema.ensure_tax_schema() on startup, but if the order changes
+    we don't want a write failure to take down the funding loop.
+    """
+    conn = sqlite3.connect(str(DB_PATH), timeout=10)
+    try:
+        conn.execute(
+            """
+            INSERT INTO funding_income_events
+              (position_id, pair, payment_usd, funding_rate)
+            VALUES (?, ?, ?, ?)
+            """,
+            (pos_id, pair, payment_usd, funding_rate),
+        )
+        conn.commit()
+    except sqlite3.OperationalError as exc:
+        log.warning("funding_income_events insert skipped: %s", exc)
+    finally:
+        conn.close()
+
+
+def db_close_position(pos_id: int, realized_pnl: float, reason: str,
+                       exit_price: Optional[float] = None) -> None:
+    """
+    Mark a funding-arb position closed.
+
+    S70 Phase A: ``exit_price`` is the spot leg's close price. When
+    provided, the tax export view computes the spot-leg realized P&L
+    independently from funding income (Schedule 1 vs Form 8949).
+    Older closed rows have ``exit_price`` NULL — the tax view reports
+    NULL proceeds for those rows.
+    """
     conn = sqlite3.connect(str(DB_PATH))
     try:
         conn.execute("""
             UPDATE funding_positions
             SET status='closed', realized_pnl=?, closed_at=datetime('now'),
-                close_reason=?
+                close_reason=?, exit_price=?
             WHERE id=?
-        """, (realized_pnl, reason, pos_id))
+        """, (realized_pnl, reason, exit_price, pos_id))
         conn.commit()
     finally:
         conn.close()
@@ -726,7 +767,20 @@ def close_pair_trade(pos: FundingPosition, reason: str) -> float:
     estimated_spread_cost = pos.entry_price * pos.quantity * 0.0004  # 0.04% conservative
     realized = round(pos.funding_collected - estimated_spread_cost, 6)
 
-    db_close_position(pos.db_id, realized, reason)
+    # S70 Phase A: capture spot exit price for tax reporting. Best-effort —
+    # if the ticker call fails (network blip, exchange down), we record
+    # NULL exit_price rather than blocking the close.
+    exit_price: Optional[float] = None
+    try:
+        ticker = binance.get_ticker(pos.spot_symbol)
+        last   = ticker.get("lastPrice")
+        if last is not None:
+            exit_price = float(last)
+    except Exception as exc:
+        log.warning("Failed to capture spot exit_price for %s: %s",
+                    pos.spot_symbol, exc)
+
+    db_close_position(pos.db_id, realized, reason, exit_price=exit_price)
     pos.open = False
     log.info("Arb pair closed: %s pnl=%.4f funding=%.4f",
              pos.pair, realized, pos.funding_collected)
@@ -872,6 +926,8 @@ class FundingArbEngine:
             if funding_payment > 0:
                 pos.funding_collected = round(pos.funding_collected + funding_payment, 6)
                 db_update_funding(pos.db_id, funding_payment)
+                # S70 Phase A: emit one row per funding payment for tax reporting
+                db_log_funding_event(pos.db_id, pos.pair, funding_payment, rate)
 
             close, reason = should_close(pos, rate)
             if close:

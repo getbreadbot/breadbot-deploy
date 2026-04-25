@@ -104,6 +104,12 @@ export default function Performance() {
   const [range, setRange]   = useState(30)
   const [loading, setLoad]  = useState(true)
   const [error, setError]   = useState('')
+  // S70 Phase A: tax export controls
+  const _now      = new Date()
+  const _curYear  = _now.getFullYear()
+  const [taxYear,   setTaxYear]   = useState(_curYear)
+  const [taxFmt,    setTaxFmt]    = useState('koinly')
+  const [taxStatus, setTaxStatus] = useState('')
 
   const load = useCallback(async (days) => {
     setLoad(true)
@@ -259,6 +265,97 @@ export default function Performance() {
         ) : (
           <div style={{ fontSize: 13, color: 'var(--text-3)' }}>
             {perf?.error ?? 'Unable to reach MCP server.'}
+          </div>
+        )}
+      </div>
+
+      {/* S70 Phase A: Tax Export */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div className="card-title">Tax export</div>
+        <div style={{ fontSize: 13, color: 'var(--text-3)', marginBottom: 12 }}>
+          Generate a CSV of all closed trades for filing. Trades opened
+          in a prior year and closed during the selected year are included
+          (IRS realization rule). For tax advice, talk to a qualified CPA —
+          this export is a record-keeping tool, not legal or tax advice.
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap',
+                      alignItems: 'flex-end', marginBottom: 8 }}>
+          <div>
+            <label style={{ display: 'block', fontSize: 12,
+                            color: 'var(--text-3)', marginBottom: 4 }}>
+              Year
+            </label>
+            <select
+              value={taxYear}
+              onChange={e => setTaxYear(parseInt(e.target.value, 10))}
+              style={{ padding: '6px 10px', background: 'var(--bg-2)',
+                       color: 'var(--text-1)', border: '1px solid var(--bg-3)',
+                       borderRadius: 6 }}
+            >
+              {[_curYear, _curYear - 1].map(y => (
+                <option key={y} value={y}>{y}{y === _curYear ? ' (YTD)' : ''}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label style={{ display: 'block', fontSize: 12,
+                            color: 'var(--text-3)', marginBottom: 4 }}>
+              Format
+            </label>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[
+                { id: 'koinly',      label: 'Koinly' },
+                { id: 'cointracker', label: 'CoinTracker' },
+                { id: 'irs8949',     label: 'IRS 8949' },
+              ].map(f => (
+                <button key={f.id}
+                  className={`btn btn-sm ${taxFmt === f.id ? 'btn-amber' : 'btn-ghost'}`}
+                  onClick={() => setTaxFmt(f.id)}
+                >{f.label}</button>
+              ))}
+            </div>
+          </div>
+          <button
+            className="btn btn-amber"
+            onClick={async () => {
+              setTaxStatus('')
+              try {
+                const res = await fetch(
+                  `/api/tax/export?year=${taxYear}&format=${taxFmt}`,
+                  { credentials: 'include' }
+                )
+                if (res.status === 401) {
+                  window.location.href = '/login'
+                  return
+                }
+                if (res.status === 404) {
+                  setTaxStatus(`No taxable events found for ${taxYear}.`)
+                  return
+                }
+                if (!res.ok) {
+                  const e = await res.json().catch(() => ({ detail: res.statusText }))
+                  setTaxStatus(`Export failed: ${e.detail || res.statusText}`)
+                  return
+                }
+                const blob = await res.blob()
+                const url  = URL.createObjectURL(blob)
+                const a    = document.createElement('a')
+                a.href     = url
+                a.download = `breadbot_tax_${taxYear}_${taxFmt}.csv`
+                document.body.appendChild(a)
+                a.click()
+                a.remove()
+                URL.revokeObjectURL(url)
+                setTaxStatus(`Downloaded ${taxYear} ${taxFmt} CSV.`)
+              } catch (e) {
+                setTaxStatus(`Export failed: ${e.message}`)
+              }
+            }}
+          >Export CSV</button>
+        </div>
+        {taxStatus && (
+          <div style={{ fontSize: 12, color: 'var(--text-3)', marginTop: 4 }}>
+            {taxStatus}
           </div>
         )}
       </div>

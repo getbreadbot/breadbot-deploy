@@ -9,6 +9,7 @@ const NAV_OPERATIONS = [
   { to: '/yields',    label: 'Yields',     icon: '⟁' },
   { to: '/controls',  label: 'Controls',   icon: '◉' },
   { to: '/channels',  label: 'Signal Channels', icon: '⊹' },
+  { to: '/research',  label: 'Research',        icon: '🔍' },
 ]
 
 const NAV_STRATEGIES = [

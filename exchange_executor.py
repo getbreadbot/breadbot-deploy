@@ -54,6 +54,7 @@ def execute_trade(
     symbol: str,
     position_usd: float,
     price_usd: float,
+    force: bool = False,
 ) -> bool:
     """
     Route and execute an auto-approved trade.
@@ -64,17 +65,23 @@ def execute_trade(
         symbol:       human-readable symbol (for logging)
         position_usd: dollar amount approved by AutoExecutor
         price_usd:    current price per token
+        force:        if True, bypasses the execution_mode='auto' gate.
+                      Used by manual buy paths (Research page) where the
+                      user has explicitly initiated the trade. The pause
+                      flag and daily loss limit are still respected via
+                      the AutoExecutor.evaluate() called upstream.
 
     Returns:
         True if trade was submitted to the exchange successfully.
         False if execution was skipped, failed, or the connector is unconfigured.
     """
-    # DB-first config read (matches AutoExecutor pattern)
-    mode = _db_get_config("execution_mode") or os.getenv("EXECUTION_MODE", "manual").strip().lower()
-    mode = mode.lower()
-    if mode != "auto":
-        log.debug("execute_trade called but EXECUTION_MODE=%s — skip", mode)
-        return False
+    if not force:
+        # DB-first config read (matches AutoExecutor pattern)
+        mode = _db_get_config("execution_mode") or os.getenv("EXECUTION_MODE", "manual").strip().lower()
+        mode = mode.lower()
+        if mode != "auto":
+            log.debug("execute_trade called but EXECUTION_MODE=%s — skip", mode)
+            return False
 
     if position_usd <= 0:
         log.warning("execute_trade: position_usd=%s — skip", position_usd)

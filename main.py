@@ -174,6 +174,15 @@ async def _init_db() -> None:
     from alt_data_signals import ensure_alt_data_table
     ensure_alt_data_table()
 
+    # S70 Phase A: tax schema (ALTERs grid_fills + funding_positions,
+    # creates funding_income_events, seeds tax_* bot_config keys, refreshes view)
+    from tax_schema import ensure_tax_schema
+    ensure_tax_schema()
+
+    # S70 P2: research / watchlist schema
+    from research_schema import ensure_research_schema
+    ensure_research_schema()
+
     log.info("All DB tables initialised")
 
 
@@ -393,6 +402,10 @@ async def main() -> None:
         # Axiom signal poll loop (DEXScreener boosts + optional Axiom stream)
         from axiom_signals import axiom_poll_loop
         tasks.append(asyncio.create_task(axiom_poll_loop(), name="axiom_signals"))
+
+        # S70 P2: watchlist monitor (opt-in — needs WATCHLIST_MONITOR_ENABLED=true)
+        from research_monitor import watchlist_loop
+        tasks.append(asyncio.create_task(watchlist_loop(), name="watchlist_monitor"))
 
         log.info("All %d tasks started", len(tasks))
 
