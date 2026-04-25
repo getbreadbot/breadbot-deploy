@@ -217,6 +217,7 @@ export default function Research() {
   const dex = data?.dexscreener || {}
   const gp  = data?.goplus || {}
   const rugRisks = data?.rugcheck?.risks || []
+  const scannerAlert = data?.scanner_alert || null
   // Allow the buy button only when we have a real price (else execute_trade
   // will fail server-side anyway) and the Solana/Base chains where the bot
   // executor is wired.
@@ -377,6 +378,28 @@ export default function Research() {
                                               border: '1px solid var(--bg-3)',
                                               color: 'var(--text-2)', borderRadius: 4 }}>
                         {r}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Scanner cached rationale (S71 P2) */}
+              {scannerAlert && scannerAlert.flags && scannerAlert.flags.length > 0 && (
+                <div className="card" style={{ marginBottom: 16 }}>
+                  <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span>Scanner — Why we'd alert</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 'normal' }}>
+                      score {scannerAlert.score} · {scannerAlert.alerted_at}
+                    </span>
+                  </div>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {scannerAlert.flags.map((f, i) => (
+                      <span key={i} style={{ fontSize: 12, padding: '4px 10px',
+                                              background: 'var(--bg-2)',
+                                              border: '1px solid var(--bg-3)',
+                                              color: 'var(--text-2)', borderRadius: 4 }}>
+                        {f}
                       </span>
                     ))}
                   </div>

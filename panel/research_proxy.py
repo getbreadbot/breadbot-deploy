@@ -173,6 +173,33 @@ async def _run_research(token_addr: str) -> dict:
         except Exception as exc:
             log.warning("research: DEXScreener fetch failed for %s: %s", token_addr, exc)
 
+    # ── Scanner cache lookup (S71 P2) ────────────────────────────────────
+    # If the scanner has already alerted on this address, surface its richer
+    # scoring rationale (pump penalty, holder count, momentum, etc) which
+    # this lighter rubric above does not compute. Read-only.
+    try:
+        import json as _json
+        with sqlite3.connect(str(DB_PATH), timeout=5) as conn:
+            row = conn.execute(
+                "SELECT rug_score, rug_flags, datetime(created_at) AS at "
+                "FROM meme_alerts WHERE token_addr = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (token_addr,),
+            ).fetchone()
+        if row is not None:
+            scanner_score, scanner_flags_json, scanner_at = row
+            try:
+                scanner_flags = _json.loads(scanner_flags_json) if scanner_flags_json else []
+            except (ValueError, TypeError):
+                scanner_flags = []
+            result["scanner_alert"] = {
+                "score": scanner_score,
+                "flags": scanner_flags,
+                "alerted_at": scanner_at,
+            }
+    except Exception as exc:
+        log.warning("research: scanner cache lookup failed for %s: %s", token_addr, exc)
+
     return result
 
 
