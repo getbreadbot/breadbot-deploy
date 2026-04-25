@@ -204,3 +204,21 @@ required = false
 name = "AXIOM_SESSION_COOKIE"
 description = "Axiom auth cookie (auth-access-token + auth-refresh-token). Extract from Chrome DevTools → Application → Cookies → axiom.trade. Enables Axiom pump stream scoring (+6 per hit). Leave blank to use DEXScreener boosts only."
 required = false
+
+[[deploy.envVars]]
+name = "WATCHLIST_MONITOR_ENABLED"
+description = "Set to 'true' to enable Telegram alerts on watchlist coins. When enabled, the bot polls every coin in your watchlist every 5 minutes and alerts when the rug score drops 15+ points or the price moves 20%+ from baseline. Default: false (you can still add coins to the watchlist with this off — they just will not generate alerts)."
+default = "false"
+required = false
+
+[[deploy.envVars]]
+name = "WATCHLIST_POLL_SECONDS"
+description = "How often (in seconds) the watchlist monitor checks each coin. Lower values mean faster alerts but more API calls. Default: 300 (5 minutes). Only used when WATCHLIST_MONITOR_ENABLED=true."
+default = "300"
+required = false
+
+[[deploy.envVars]]
+name = "WATCHLIST_ALERT_COOLDOWN"
+description = "Minimum seconds between Telegram alerts for the same watchlist coin, to prevent alert spam. Default: 3600 (1 hour). Only used when WATCHLIST_MONITOR_ENABLED=true."
+default = "3600"
+required = false
