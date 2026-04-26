@@ -153,7 +153,13 @@ async def _init_db() -> None:
                 0.0 AS fee_usd, p.realized_pnl_usd AS pnl_usd, NULL AS tx_hash,
                 p.exchange AS exchange, p.closed_at AS executed_at
               FROM positions p
-              WHERE p.status='closed'
+              -- S72 P2: include 'closed' and 'closed_rugged' so rug exits
+              -- show up in the dashboard P&L. Strict equality on 'closed'
+              -- was hiding 3 trades worth -$14.95 from the lifetime total.
+              -- 'stopped' and 'manual' are intentionally excluded — those
+              -- are SL/TP/manual exits that have NULL realized_pnl_usd
+              -- until position_manager backfills them.
+              WHERE p.status LIKE 'closed%'
         """)
 
         conn.commit()
