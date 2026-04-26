@@ -185,6 +185,124 @@ def cancel_order(symbol: str, order_id: int) -> dict:
     return result
 
 
+# ── Exchange filter quantization (S72 P3 — moved here from grid_engine) ──────
+# Binance.US rejects orders whose qty is not an integer multiple of LOT_SIZE
+# stepSize, or whose price is not a tickSize multiple, with -1013 "Filter
+# failure: LOT_SIZE". These helpers cache filters per symbol on first use
+# and floor qty/price to the nearest valid step.
+
+import math as _math
+
+_FILTER_CACHE: dict[str, dict] = {}
+
+
+def get_symbol_filters(symbol: str) -> dict:
+    """Return a dict with keys: step_size, min_qty, tick_size, min_notional.
+
+    Cached per symbol after first successful lookup. Returns an empty dict
+    if exchange info is unavailable — callers must treat that as
+    'no quantization possible' (skip the order rather than place an
+    invalid one).
+    """
+    sym = symbol.upper()
+    if sym in _FILTER_CACHE:
+        return _FILTER_CACHE[sym]
+    out: dict = {}
+    try:
+        info = get_exchange_info(sym)
+        symbols = info.get("symbols", []) if isinstance(info, dict) else []
+        if not symbols:
+            logger.warning("Exchange info returned no symbol %s", sym)
+            _FILTER_CACHE[sym] = out
+            return out
+        for f in symbols[0].get("filters", []):
+            ftype = f.get("filterType")
+            if ftype == "LOT_SIZE":
+                out["step_size"] = float(f.get("stepSize", 0) or 0)
+                out["min_qty"]   = float(f.get("minQty", 0) or 0)
+            elif ftype == "PRICE_FILTER":
+                out["tick_size"] = float(f.get("tickSize", 0) or 0)
+            elif ftype in ("MIN_NOTIONAL", "NOTIONAL"):
+                mn = f.get("minNotional") or f.get("notional") or 0
+                out["min_notional"] = float(mn or 0)
+    except Exception as exc:
+        logger.warning("Failed to fetch exchange filters for %s: %s", sym, exc)
+    _FILTER_CACHE[sym] = out
+    return out
+
+
+def floor_to_step(value: float, step: float) -> float:
+    """Floor `value` to the nearest multiple of `step`. step<=0 → unchanged."""
+    if step <= 0:
+        return value
+    return _math.floor(round(value / step, 10)) * step
+
+
+def quantize_order(symbol: str, quantity: float,
+                   price: float | None = None) -> tuple | None:
+    """Quantize qty to stepSize (floor) and price to tickSize (floor).
+
+    Returns (qty, price) tuple on success, or None if qty falls below
+    minQty after quantization (caller should skip that order).
+
+    price=None is passed through unchanged (for MARKET orders).
+    """
+    f = get_symbol_filters(symbol)
+    step = f.get("step_size", 0)
+    min_qty = f.get("min_qty", 0)
+    tick = f.get("tick_size", 0)
+
+    qty = floor_to_step(quantity, step) if step > 0 else quantity
+    if min_qty > 0 and qty < min_qty:
+        logger.warning(
+            "Quantized qty %.10f below minQty %.10f for %s (raw=%.10f step=%s); "
+            "skipping order",
+            qty, min_qty, symbol, quantity, step,
+        )
+        return None
+    if step > 0:
+        decimals = max(0, -int(round(_math.log10(step)))) if step < 1 else 0
+        qty = round(qty, decimals)
+
+    out_price = price
+    if price is not None and tick > 0:
+        out_price = floor_to_step(price, tick)
+        decimals = max(0, -int(round(_math.log10(tick)))) if tick < 1 else 0
+        out_price = round(out_price, decimals)
+
+    return qty, out_price
+
+
+def place_order_quantized(symbol: str, side: str, order_type: str,
+                          quantity: float, price: float | None = None,
+                          time_in_force: str = "GTC") -> dict | None:
+    """Convenience wrapper: quantize then place_order.
+
+    Returns a dict shaped {"order": <api_response>, "qty": <float>,
+    "price": <float | None>} on success, where qty/price are the
+    quantized values (caller updates its own state with these).
+
+    Returns None if quantization rejected the order (qty below minQty or
+    no filter info available) — caller should treat that as "skip".
+
+    Raises ValueError for LIMIT orders without a price, matching
+    place_order's contract.
+    """
+    q = quantize_order(symbol, quantity, price)
+    if q is None:
+        return None
+    qty_q, price_q = q
+    result = place_order(
+        symbol        = symbol,
+        side          = side,
+        order_type    = order_type,
+        quantity      = qty_q,
+        price         = price_q,
+        time_in_force = time_in_force,
+    )
+    return {"order": result, "qty": qty_q, "price": price_q}
+
+
 # ── Self-test ──────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

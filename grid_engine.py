@@ -107,82 +107,14 @@ POLL_INTERVAL      = 60    # seconds between fill-check cycles
 RSI_CANDLE_LIMIT   = 50    # candles fetched for RSI calculation (need 14+)
 
 
-# __ Exchange filter quantization (S68 P1) ___________________________________
-# Binance.US rejects orders whose qty is not an integer multiple of LOT_SIZE
-# stepSize, or whose price is not a tickSize multiple. Error -1013 "Filter
-# failure: LOT_SIZE". Cache filters per symbol on first use.
-
-_FILTER_CACHE: dict[str, dict] = {}
-
-
-def _get_symbol_filters(symbol: str) -> dict:
-    """Return dict with keys: step_size, min_qty, tick_size, min_notional.
-    Cached per symbol. Returns empty dict if exchange info unavailable."""
-    sym = symbol.upper()
-    if sym in _FILTER_CACHE:
-        return _FILTER_CACHE[sym]
-    out: dict = {}
-    try:
-        info = binance.get_exchange_info(sym)
-        symbols = info.get("symbols", []) if isinstance(info, dict) else []
-        if not symbols:
-            log.warning("Exchange info returned no symbol %s", sym)
-            _FILTER_CACHE[sym] = out
-            return out
-        for f in symbols[0].get("filters", []):
-            ftype = f.get("filterType")
-            if ftype == "LOT_SIZE":
-                out["step_size"] = float(f.get("stepSize", 0) or 0)
-                out["min_qty"]   = float(f.get("minQty", 0) or 0)
-            elif ftype == "PRICE_FILTER":
-                out["tick_size"] = float(f.get("tickSize", 0) or 0)
-            elif ftype in ("MIN_NOTIONAL", "NOTIONAL"):
-                mn = f.get("minNotional") or f.get("notional") or 0
-                out["min_notional"] = float(mn or 0)
-    except Exception as exc:
-        log.warning("Failed to fetch exchange filters for %s: %s", sym, exc)
-    _FILTER_CACHE[sym] = out
-    return out
-
-
-def _floor_to_step(value: float, step: float) -> float:
-    """Floor value to the nearest multiple of step."""
-    if step <= 0:
-        return value
-    return math.floor(round(value / step, 10)) * step
-
+# __ Exchange filter quantization (S72 P3: moved to binance_connector) _______
+# get_symbol_filters / floor_to_step / quantize_order / place_order_quantized
+# now live in binance_connector. Local thin wrapper below preserves the old
+# `_quantize_order(symbol, qty, price)` call shape used elsewhere in this
+# file so we don't have to edit every call site.
 
 def _quantize_order(symbol: str, quantity: float, price):
-    """Quantize qty to stepSize (floor) and price to tickSize (floor).
-
-    Returns (qty, price) tuple on success, or None if qty falls below minQty
-    after quantization (caller should skip that level).
-
-    price=None is passed through unchanged (for MARKET orders)."""
-    f = _get_symbol_filters(symbol)
-    step = f.get("step_size", 0)
-    min_qty = f.get("min_qty", 0)
-    tick = f.get("tick_size", 0)
-
-    qty = _floor_to_step(quantity, step) if step > 0 else quantity
-    if min_qty > 0 and qty < min_qty:
-        log.warning(
-            "Quantized qty %.10f below minQty %.10f for %s (raw=%.10f step=%s); "
-            "skipping order",
-            qty, min_qty, symbol, quantity, step,
-        )
-        return None
-    if step > 0:
-        decimals = max(0, -int(round(math.log10(step)))) if step < 1 else 0
-        qty = round(qty, decimals)
-
-    out_price = price
-    if price is not None and tick > 0:
-        out_price = _floor_to_step(price, tick)
-        decimals = max(0, -int(round(math.log10(tick)))) if tick < 1 else 0
-        out_price = round(out_price, decimals)
-
-    return qty, out_price
+    return binance.quantize_order(symbol, quantity, price)
 
 
 
