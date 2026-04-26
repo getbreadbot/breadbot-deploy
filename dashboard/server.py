@@ -1175,91 +1175,44 @@ def _update_env_file(env_path, updates):
 
 @app.get("/api/research/{token_addr}")
 async def api_research(token_addr: str):
-    # Detect chain by address format
+    """Token research endpoint (S72 P1: delegates to research_logic.score_token).
+
+    Before S72 this used a lighter 7-rule mechanical-safety rubric that
+    returned ~100 for almost every coin. Now it shares the full ~22-rule
+    scanner rubric so demo and panel give the same answer.
+    """
     chain = "solana" if not token_addr.startswith("0x") else "base"
-    chain_id = "solana" if chain == "solana" else "8453"
 
     result = {
         "token_addr": token_addr,
-        "chain": chain,
-        "rug_score": 100,
-        "flags": [],
-        "goplus": {},
-        "rugcheck": {},
+        "chain":      chain,
+        "rug_score":  100,
+        "flags":      [],
+        "goplus":     {},
+        "rugcheck":   {},
         "dexscreener": {},
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        # GoPlus
-        try:
-            gp_resp = await client.get(
-                f"https://api.gopluslabs.io/api/v1/token_security/{chain_id}",
-                params={"contract_addresses": token_addr},
-            )
-            gp_data = gp_resp.json()
-            gp_result = gp_data.get("result", {})
-            gp = gp_result.get(token_addr.lower()) or gp_result.get(token_addr) or {}
-            result["goplus"] = {
-                "is_honeypot": str(gp.get("is_honeypot", "0")) == "1",
-                "sell_tax": float(gp.get("sell_tax", 0) or 0),
-                "buy_tax": float(gp.get("buy_tax", 0) or 0),
-                "owner_address": gp.get("owner_address", ""),
-            }
-            # Score deductions
-            flags = []
-            score = 100
-            if result["goplus"]["is_honeypot"]:
-                flags.append("Honeypot detected"); score -= 40
-            if str(gp.get("is_mintable", "0")) == "1":
-                flags.append("Mintable supply"); score -= 15
-            if str(gp.get("is_blacklisted", "0")) == "1":
-                flags.append("Has blacklist"); score -= 20
-            if str(gp.get("transfer_pausable", "0")) == "1":
-                flags.append("Transfer pausable"); score -= 20
-            owner = gp.get("owner_address", "")
-            if owner and owner != "0x0000000000000000000000000000000000000000":
-                flags.append("Owner not renounced"); score -= 10
-            if result["goplus"]["sell_tax"] > 5:
-                flags.append(f"High sell tax ({result['goplus']['sell_tax']}%)"); score -= 15
-            if result["goplus"]["buy_tax"] > 5:
-                flags.append(f"High buy tax ({result['goplus']['buy_tax']}%)"); score -= 10
-            result["flags"] = flags
-            result["rug_score"] = max(0, score)
-        except Exception:
-            pass
+    try:
+        from research_logic import score_token
+    except ImportError as exc:
+        result["flags"] = [f"Research scoring unavailable — internal error: {exc}"]
+        result["rug_score"] = 50
+        return JSONResponse(result)
 
-        # RugCheck
-        try:
-            rc_resp = await client.get(f"https://api.rugcheck.xyz/v1/tokens/{token_addr}/report")
-            if rc_resp.status_code == 200:
-                rc_data = rc_resp.json()
-                risks = rc_data.get("risks", [])
-                result["rugcheck"] = {
-                    "score": rc_data.get("score", 0),
-                    "risks": [r.get("name", "") for r in risks],
-                }
-                if any(r.get("level") == "critical" for r in risks):
-                    result["flags"].append("RugCheck critical risk")
-                    result["rug_score"] = max(0, result["rug_score"] - 15)
-        except Exception:
-            pass
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            scored = await score_token(client, chain, token_addr)
+    except Exception as exc:
+        result["flags"] = [f"Scoring failed: {exc}"]
+        result["rug_score"] = 50
+        return JSONResponse(result)
 
-        # DEXScreener
-        try:
-            dx_resp = await client.get(f"https://api.dexscreener.com/latest/dex/tokens/{token_addr}")
-            dx_data = dx_resp.json()
-            pairs = dx_data.get("pairs") or []
-            if pairs:
-                p = pairs[0]
-                result["dexscreener"] = {
-                    "name": p.get("baseToken", {}).get("name", ""),
-                    "symbol": p.get("baseToken", {}).get("symbol", ""),
-                    "price_usd": float(p.get("priceUsd") or 0),
-                    "liquidity": float(p.get("liquidity", {}).get("usd") or 0),
-                    "volume_24h": float(p.get("volume", {}).get("h24") or 0),
-                }
-        except Exception:
-            pass
+    result["rug_score"]   = scored.get("score", 50)
+    result["flags"]       = scored.get("flags", [])
+    result["goplus"]      = scored.get("goplus", {})
+    result["rugcheck"]    = scored.get("rugcheck", {})
+    result["dexscreener"] = scored.get("dexscreener", {})
 
     return JSONResponse(result)
 

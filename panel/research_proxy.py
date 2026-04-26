@@ -75,17 +75,24 @@ def _detect_chain(addr: str) -> tuple[str, str]:
     return "solana", "solana"
 
 
-# ── Research (proxy of dashboard/server.py:api_research) ─────────────────────
+# ── Research (uses shared research_logic.score_token, S72 P1) ────────────────
 
 async def _run_research(token_addr: str) -> dict:
-    """Run the same security checks as the legacy dashboard endpoint.
+    """Run the full ~22-rule scoring rubric for a token address.
 
-    Reuses the same scoring logic (matching dashboard/server.py) so the
-    demo and the panel return identical scores. Any future score-rule
-    changes should be made in BOTH places — there's no shared module
-    today because the dashboard runs in a different service.
+    S72 P1: this delegates to research_logic.score_token so the Research
+    page sees the same score the scanner would compute. Before S72 this
+    function ran a lighter 7-rule mechanical-safety rubric that started at
+    100 and only deducted on hard rug-pull signals — the result was that
+    nearly every coin scored 100 and the page was useless for real triage.
+
+    The shared module surfaces GoPlus + RugCheck + DEXScreener data, plus
+    the same momentum / liquidity / vol-liq / age / holder / social /
+    Axiom / time-of-day adjustments scanner.process_pair applies. The
+    `should_drop` flag is ignored here — the scanner uses it to skip an
+    alert, the Research page wants the score regardless.
     """
-    chain, chain_id = _detect_chain(token_addr)
+    chain, _chain_id = _detect_chain(token_addr)
     result = {
         "token_addr":  token_addr,
         "chain":       chain,
@@ -96,87 +103,34 @@ async def _run_research(token_addr: str) -> dict:
         "dexscreener": {},
     }
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        # ── GoPlus ───────────────────────────────────────────────────────
-        try:
-            gp_resp = await client.get(
-                f"https://api.gopluslabs.io/api/v1/token_security/{chain_id}",
-                params={"contract_addresses": token_addr},
-            )
-            gp_data = gp_resp.json()
-            gp_root = gp_data.get("result", {}) or {}
-            gp = gp_root.get(token_addr.lower()) or gp_root.get(token_addr) or {}
+    try:
+        from research_logic import score_token
+    except ImportError as exc:
+        log.error("research_proxy: research_logic import failed: %s", exc)
+        result["flags"] = ["Research scoring unavailable — internal error"]
+        result["rug_score"] = 50
+        return result
 
-            result["goplus"] = {
-                "is_honeypot":  str(gp.get("is_honeypot", "0")) == "1",
-                "sell_tax":     float(gp.get("sell_tax", 0) or 0),
-                "buy_tax":      float(gp.get("buy_tax", 0) or 0),
-                "owner_address": gp.get("owner_address", ""),
-            }
-            flags: list[str] = []
-            score = 100
-            if result["goplus"]["is_honeypot"]:
-                flags.append("Honeypot detected"); score -= 40
-            if str(gp.get("is_mintable", "0")) == "1":
-                flags.append("Mintable supply"); score -= 15
-            if str(gp.get("is_blacklisted", "0")) == "1":
-                flags.append("Has blacklist"); score -= 20
-            if str(gp.get("transfer_pausable", "0")) == "1":
-                flags.append("Transfer pausable"); score -= 20
-            owner = gp.get("owner_address", "")
-            if owner and owner != "0x0000000000000000000000000000000000000000":
-                flags.append("Owner not renounced"); score -= 10
-            if result["goplus"]["sell_tax"] > 5:
-                flags.append(f"High sell tax ({result['goplus']['sell_tax']}%)"); score -= 15
-            if result["goplus"]["buy_tax"] > 5:
-                flags.append(f"High buy tax ({result['goplus']['buy_tax']}%)"); score -= 10
-            result["flags"] = flags
-            result["rug_score"] = max(0, score)
-        except Exception as exc:
-            log.warning("research: GoPlus fetch failed for %s: %s", token_addr, exc)
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            scored = await score_token(client, chain, token_addr)
+    except Exception as exc:
+        log.warning("research: score_token failed for %s: %s", token_addr, exc)
+        result["flags"] = [f"Scoring failed: {exc}"]
+        result["rug_score"] = 50
+        return result
 
-        # ── RugCheck ─────────────────────────────────────────────────────
-        try:
-            rc_resp = await client.get(
-                f"https://api.rugcheck.xyz/v1/tokens/{token_addr}/report"
-            )
-            if rc_resp.status_code == 200:
-                rc_data = rc_resp.json()
-                risks = rc_data.get("risks", []) or []
-                result["rugcheck"] = {
-                    "score":  rc_data.get("score", 0),
-                    "risks":  [r.get("name", "") for r in risks if r.get("name")],
-                }
-                if any(r.get("level") == "critical" for r in risks):
-                    result["flags"].append("RugCheck critical risk")
-                    result["rug_score"] = max(0, result["rug_score"] - 15)
-        except Exception as exc:
-            log.warning("research: RugCheck fetch failed for %s: %s", token_addr, exc)
+    result["rug_score"]   = scored.get("score", 50)
+    result["flags"]       = scored.get("flags", [])
+    result["goplus"]      = scored.get("goplus", {})
+    result["rugcheck"]    = scored.get("rugcheck", {})
+    result["dexscreener"] = scored.get("dexscreener", {})
 
-        # ── DEXScreener ──────────────────────────────────────────────────
-        try:
-            dx_resp = await client.get(
-                f"https://api.dexscreener.com/latest/dex/tokens/{token_addr}"
-            )
-            dx_data = dx_resp.json()
-            pairs = dx_data.get("pairs") or []
-            if pairs:
-                p = pairs[0]
-                result["dexscreener"] = {
-                    "name":       p.get("baseToken", {}).get("name", ""),
-                    "symbol":     p.get("baseToken", {}).get("symbol", ""),
-                    "price_usd":  float(p.get("priceUsd") or 0),
-                    "liquidity":  float((p.get("liquidity") or {}).get("usd") or 0),
-                    "volume_24h": float((p.get("volume") or {}).get("h24") or 0),
-                    "market_cap": float(p.get("marketCap") or p.get("fdv") or 0),
-                }
-        except Exception as exc:
-            log.warning("research: DEXScreener fetch failed for %s: %s", token_addr, exc)
-
-    # ── Scanner cache lookup (S71 P2) ────────────────────────────────────
-    # If the scanner has already alerted on this address, surface its richer
-    # scoring rationale (pump penalty, holder count, momentum, etc) which
-    # this lighter rubric above does not compute. Read-only.
+    # ── Scanner cache lookup (S71 P2 — kept as historical context) ───────
+    # If the scanner has already alerted on this address, surface what the
+    # bot saw at that moment (alerted_at + flags). Now that the live score
+    # above uses the same rubric, this block is "what we thought when we
+    # alerted" rather than "the only place momentum signals show up".
     try:
         import json as _json
         with sqlite3.connect(str(DB_PATH), timeout=5) as conn:
