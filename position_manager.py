@@ -368,6 +368,50 @@ def _send_telegram(text: str) -> None:
         pass
 
 
+def _time_stop_check(age_sec: float, pct_vs_entry: float) -> tuple[bool, str]:
+    """S74 P1a: time-stop on losers.
+
+    Loser-only by design: positive-territory positions are left to the TP
+    ladder. Three-tier cascade evaluated against the current position age
+    and percent-vs-entry:
+
+      30 min + at or below TIME_STOP_30MIN_LOSS_PCT  (default -5.0%)
+      60 min + at or below TIME_STOP_60MIN_LOSS_PCT  (default -2.0%)
+      TIME_STOP_HARD_MINUTES + any loss              (default 120 min)
+
+    Tunable via env or bot_config:
+      TIME_STOP_ENABLED          — master switch, default "false"
+      TIME_STOP_30MIN_LOSS_PCT   — default -5.0
+      TIME_STOP_60MIN_LOSS_PCT   — default -2.0
+      TIME_STOP_HARD_MINUTES     — default 120
+
+    Returns (should_exit, reason). Reason is a short tag included in
+    _mark_closed note for forensics.
+    """
+    if not _cfg_bool("TIME_STOP_ENABLED", "false"):
+        return (False, "")
+    if pct_vs_entry >= 0:
+        # Winners and break-evens go through TPs, never time-stop.
+        return (False, "")
+
+    age_min = age_sec / 60.0
+    hard_min = _cfg_float("TIME_STOP_HARD_MINUTES", "120")
+    if age_min >= hard_min:
+        return (True, f"hard_{int(hard_min)}min")
+
+    if age_min >= 60:
+        threshold_60 = _cfg_float("TIME_STOP_60MIN_LOSS_PCT", "-2.0")
+        if pct_vs_entry <= threshold_60:
+            return (True, f"60min_at_{pct_vs_entry:.1f}pct")
+
+    if age_min >= 30:
+        threshold_30 = _cfg_float("TIME_STOP_30MIN_LOSS_PCT", "-5.0")
+        if pct_vs_entry <= threshold_30:
+            return (True, f"30min_at_{pct_vs_entry:.1f}pct")
+
+    return (False, "")
+
+
 def _evaluate_position(row: dict) -> None:
     """Check one open position against its SL/TP levels and act if breached."""
     pid = row["id"]
@@ -437,10 +481,24 @@ def _evaluate_position(row: dict) -> None:
             pid, symbol, price, sl, age_sec, _SL_ARM_DELAY_SEC,
         )
 
+    # S74 P1a: time-stop on losers (loser-only). Evaluated after SL but
+    # before TPs — a position bleeding for 30+ minutes shouldn't ride a
+    # late TP, the data shows losers held >3x longer than winners with
+    # no recovery. Disabled by default; flip TIME_STOP_ENABLED=true to
+    # activate. Wins remain on the TP ladder regardless of age.
+    time_stop_hit, time_stop_reason = _time_stop_check(age_sec, pct_vs_entry)
+
     # Decision tree — order matters: hard stop-loss wins (once armed)
     if sl_armed and price <= sl:
         action = "SL"
         sell_fraction = 1.0
+    elif time_stop_hit:
+        action = "TIME_STOP"
+        sell_fraction = 1.0
+        log.info(
+            "Position #%d %s: time-stop fired (%s) — price=$%.9f entry=$%.9f (%+.1f%%) age=%.1fmin",
+            pid, symbol, time_stop_reason, price, entry, pct_vs_entry, age_sec / 60.0,
+        )
     elif price >= tp50:
         action = "TP50"
         sell_fraction = 1.0
