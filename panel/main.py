@@ -17,6 +17,7 @@ from auth import router as auth_router, verify_session
 from mcp_proxy import router as mcp_router
 from railway_api import router as railway_router
 from research_proxy import router as research_router
+from strategy_proxy import router as strategy_router
 from tax_export import router as tax_router
 from websocket_manager import manager, router as ws_router
 
@@ -50,6 +51,7 @@ app.include_router(auth_router,     prefix="/api/auth",     tags=["auth"])
 app.include_router(mcp_router,      prefix="/api/bot",      tags=["bot"])
 app.include_router(railway_router,  prefix="/api/settings", tags=["settings"])
 app.include_router(research_router, prefix="/api/research", tags=["research"])
+app.include_router(strategy_router, prefix="/api/bot",      tags=["strategy"])
 app.include_router(tax_router,      prefix="/api/tax",      tags=["tax"])
 app.include_router(ws_router,       prefix="/api/ws",       tags=["websocket"])
 

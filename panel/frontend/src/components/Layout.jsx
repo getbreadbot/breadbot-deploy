@@ -13,8 +13,7 @@ const NAV_OPERATIONS = [
 ]
 
 const NAV_STRATEGIES = [
-  { to: '/grid',    label: 'Grid Trading', icon: '⊞' },
-  { to: '/funding', label: 'Funding Arb',  icon: '⇄' },
+  { to: '/strategies', label: 'Strategies', icon: '⊞' },
 ]
 
 const NAV_SYSTEM = [

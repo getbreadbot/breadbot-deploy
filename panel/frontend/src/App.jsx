@@ -9,6 +9,7 @@ import Positions from './pages/Positions.jsx'
 import Yields from './pages/Yields.jsx'
 import Controls from './pages/Controls.jsx'
 import Settings   from './pages/Settings.jsx'
+import Strategies from './pages/Strategies.jsx'
 import Grid        from './pages/Grid.jsx'
 import FundingArb  from './pages/FundingArb.jsx'
 import Performance from './pages/Performance.jsx'
@@ -59,6 +60,7 @@ export default function App() {
           <Route path="yields"     element={<Yields />} />
           <Route path="controls"   element={<Controls />} />
           <Route path="settings"   element={<Settings />} />
+          <Route path="strategies" element={<Strategies />} />
           <Route path="grid"       element={<Grid />} />
           <Route path="funding"    element={<FundingArb />} />
           <Route path="performance" element={<Performance />} />

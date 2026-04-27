@@ -117,6 +117,14 @@ def _quantize_order(symbol: str, quantity: float, price):
     return binance.quantize_order(symbol, quantity, price)
 
 
+def _get_symbol_filters(symbol: str):
+    # S73 P1 hotfix: S72 P3 moved this to binance_connector but missed adding
+    # the underscore-prefixed local wrapper, so line ~203 was calling an
+    # undefined name. Auto-start was failing silently as long as grid stayed
+    # disabled. Wrapper restores the original call shape.
+    return binance.get_symbol_filters(symbol)
+
+
 
 # ── Inventory preload (S68 P4) ───────────────────────────────────────────────
 # A grid needs both base and quote assets before activation: BUY levels
