@@ -16,11 +16,21 @@ Usage (from scanner.py):
     from pullback_monitor import maybe_pullback
     # Instead of calling execute_trade() directly:
     asyncio.create_task(maybe_pullback(client, pair, result, alert_id, score, flags))
+
+S74 P2: Every state transition is logged to the `pullback_events` table.
+Five event types:
+  monitoring_started          — pullback wait begins
+  duplicate_skip              — token already being monitored
+  executed_pullback_hit       — dip hit target, trade fired at the dip price
+  timeout_market_executed     — timeout reached, fallback=market hit, trade fired
+  timeout_market_unavailable  — timeout reached, fallback=market but price API down
+  timeout_skip                — timeout reached, fallback=skip (default), no trade
 """
 
 import asyncio
 import logging
 import os
+import sqlite3
 import time
 from pathlib import Path
 
@@ -35,7 +45,6 @@ def _db_get(key: str) -> str:
     if not db_path.exists():
         return ""
     try:
-        import sqlite3
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         row = conn.execute(
             "SELECT value FROM bot_config WHERE key=?", (key,)
@@ -78,6 +87,58 @@ def fallback_mode() -> str:
 
 def poll_interval_sec() -> float:
     return _cfg_float("pullback_poll_sec", "PULLBACK_POLL_SEC", "30")
+
+
+# ── S74 P2: instrumentation ──────────────────────────────────────────────────
+
+# Path resolved once at module load. Falls back gracefully if DB is missing.
+_DB_PATH = Path(__file__).parent / "data" / "cryptobot.db"
+
+
+def _log_event(
+    event_type: str,
+    *,
+    alert_id: int | None,
+    chain: str,
+    token_addr: str,
+    symbol: str | None,
+    alert_price: float | None = None,
+    target_price: float | None = None,
+    actual_price: float | None = None,
+    elapsed_sec: int | None = None,
+    improvement_pct: float | None = None,
+) -> None:
+    """Best-effort write to pullback_events. Never raises — instrumentation
+    must not break live trading if the DB is briefly locked or the schema
+    is missing."""
+    if not _DB_PATH.exists():
+        return
+    try:
+        conn = sqlite3.connect(_DB_PATH, timeout=5)
+        try:
+            conn.execute(
+                """
+                INSERT INTO pullback_events (
+                    alert_id, chain, token_addr, symbol, event_type,
+                    alert_price, target_price, actual_price,
+                    pullback_pct, timeout_min, fallback_mode,
+                    elapsed_sec, improvement_pct
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    alert_id, chain, token_addr, symbol, event_type,
+                    alert_price, target_price, actual_price,
+                    pullback_pct(), timeout_minutes(), fallback_mode(),
+                    elapsed_sec, improvement_pct,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        # Log but never raise — keep the monitor running.
+        log.warning("pullback_events insert failed for %s/%s: %s",
+                    symbol or "?", event_type, exc)
 
 
 # ── Active pullback tracking ────────────────────────────────────────────────
@@ -141,6 +202,11 @@ async def maybe_pullback(
 
     if token_addr in _active:
         log.info("pullback: %s already being monitored — skip duplicate", symbol)
+        _log_event(
+            "duplicate_skip",
+            alert_id=alert_id, chain=chain, token_addr=token_addr,
+            symbol=symbol, alert_price=alert_price,
+        )
         return
 
     pct       = pullback_pct()
@@ -153,10 +219,17 @@ async def maybe_pullback(
         symbol, alert_price, target, pct, timeout_m,
     )
 
+    started_ts = time.time()
     _active[token_addr] = {
         "symbol": symbol, "alert_price": alert_price,
-        "target": target, "started": time.time(),
+        "target": target, "started": started_ts,
     }
+
+    _log_event(
+        "monitoring_started",
+        alert_id=alert_id, chain=chain, token_addr=token_addr,
+        symbol=symbol, alert_price=alert_price, target_price=target,
+    )
 
     # Notify operator
     await send_message(
@@ -167,7 +240,7 @@ async def maybe_pullback(
         f"Timeout: {timeout_m:.0f} min | Fallback: {fallback_mode()}",
     )
 
-    deadline = time.time() + timeout_m * 60
+    deadline = started_ts + timeout_m * 60
     entry_price = None
 
     try:
@@ -187,6 +260,8 @@ async def maybe_pullback(
     finally:
         _active.pop(token_addr, None)
 
+    elapsed = int(time.time() - started_ts)
+
     # ── Decision ─────────────────────────────────────────────────────────
     if entry_price is not None:
         # Dip hit — execute at better price
@@ -194,6 +269,14 @@ async def maybe_pullback(
         pair_copy["price_usd"] = entry_price
         improvement = ((alert_price - entry_price) / alert_price) * 100
         log.info("pullback: executing %s at $%.8f (%.1f%% better)", symbol, entry_price, improvement)
+
+        _log_event(
+            "executed_pullback_hit",
+            alert_id=alert_id, chain=chain, token_addr=token_addr,
+            symbol=symbol, alert_price=alert_price, target_price=target,
+            actual_price=entry_price, elapsed_sec=elapsed,
+            improvement_pct=improvement,
+        )
 
         await _immediate_execute(
             tg_client, pair_copy, result, alert_id, score, flags,
@@ -206,12 +289,26 @@ async def maybe_pullback(
             pair_copy = dict(pair)
             pair_copy["price_usd"] = current
             log.info("pullback: timeout, fallback=market, executing %s at $%.8f", symbol, current)
+            improvement = ((alert_price - current) / alert_price) * 100
+            _log_event(
+                "timeout_market_executed",
+                alert_id=alert_id, chain=chain, token_addr=token_addr,
+                symbol=symbol, alert_price=alert_price, target_price=target,
+                actual_price=current, elapsed_sec=elapsed,
+                improvement_pct=improvement,
+            )
             await _immediate_execute(
                 tg_client, pair_copy, result, alert_id, score, flags,
                 prefix="[PULLBACK TIMEOUT — market entry] ",
             )
         else:
             log.warning("pullback: timeout, fallback=market but price unavailable for %s", symbol)
+            _log_event(
+                "timeout_market_unavailable",
+                alert_id=alert_id, chain=chain, token_addr=token_addr,
+                symbol=symbol, alert_price=alert_price, target_price=target,
+                elapsed_sec=elapsed,
+            )
             update_alert_decision(alert_id, "pending")
             await send_message(
                 tg_client,
@@ -220,6 +317,20 @@ async def maybe_pullback(
     else:
         # Timeout + skip fallback
         log.info("pullback: timeout, fallback=skip for %s", symbol)
+        # Capture the current price at the moment of timeout — answers the
+        # "would late entry have been profitable?" question without us
+        # having to re-fetch from GeckoTerminal later.
+        current_at_timeout = await _poll_price(token_addr, chain)
+        improvement_at_timeout = None
+        if current_at_timeout and current_at_timeout > 0:
+            improvement_at_timeout = ((alert_price - current_at_timeout) / alert_price) * 100
+        _log_event(
+            "timeout_skip",
+            alert_id=alert_id, chain=chain, token_addr=token_addr,
+            symbol=symbol, alert_price=alert_price, target_price=target,
+            actual_price=current_at_timeout, elapsed_sec=elapsed,
+            improvement_pct=improvement_at_timeout,
+        )
         update_alert_decision(alert_id, "pending")
         text, position = build_approval_message(pair, score, flags, result)
         text = f"[PULLBACK TIMEOUT — no dip, manual approval]\n\n{text}"

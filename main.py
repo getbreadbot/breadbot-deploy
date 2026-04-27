@@ -94,6 +94,27 @@ async def _init_db() -> None:
                 key TEXT PRIMARY KEY, value TEXT NOT NULL,
                 updated_at TEXT DEFAULT (datetime('now'))
             );
+            -- S74 P2: pullback monitor instrumentation
+            CREATE TABLE IF NOT EXISTS pullback_events (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                alert_id        INTEGER,
+                chain           TEXT NOT NULL,
+                token_addr      TEXT NOT NULL,
+                symbol          TEXT,
+                event_type      TEXT NOT NULL,
+                alert_price     REAL,
+                target_price    REAL,
+                actual_price    REAL,
+                pullback_pct    REAL,
+                timeout_min     REAL,
+                fallback_mode   TEXT,
+                elapsed_sec     INTEGER,
+                improvement_pct REAL,
+                created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            CREATE INDEX IF NOT EXISTS idx_pullback_token ON pullback_events(token_addr, created_at);
+            CREATE INDEX IF NOT EXISTS idx_pullback_event ON pullback_events(event_type, created_at);
+            CREATE INDEX IF NOT EXISTS idx_pullback_alert ON pullback_events(alert_id);
         """)
 
         # ── S57 P3 Phase 4: the `trades` table is deprecated. Position buy/sell
