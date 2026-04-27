@@ -368,6 +368,105 @@ def _send_telegram(text: str) -> None:
         pass
 
 
+# ── S74 P3: exit slippage instrumentation ───────────────────────────────────
+
+def _log_exit_poll(
+    position_id: int,
+    *,
+    observed_price: float | None,
+    pct_vs_entry: float | None,
+    age_sec: float | None,
+    action_decided: str,
+) -> None:
+    """Append one row to exit_polls. Best-effort — never raises."""
+    try:
+        conn = _db_rw()
+        try:
+            conn.execute(
+                """
+                INSERT INTO exit_polls (
+                    position_id, observed_price, pct_vs_entry, age_sec,
+                    action_decided
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    position_id,
+                    observed_price,
+                    pct_vs_entry,
+                    int(age_sec) if age_sec is not None else None,
+                    action_decided,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("exit_polls insert failed for pos=%s: %s", position_id, exc)
+
+
+def _log_exit_attempt(
+    position_id: int,
+    *,
+    action: str,
+    retry_tier: int,
+    requested_slippage_bps: int,
+    observed_price: float,
+    sl_price: float,
+    tp25_price: float,
+    tp50_price: float,
+    pct_vs_entry: float,
+    age_sec: float,
+    quantity_sold: float,
+    executed_usdc: float,
+    success: bool,
+    err_code: str | None,
+    latency_ms: int,
+) -> None:
+    """Append one row to exit_attempts. Best-effort — never raises.
+
+    Computes derived fields executed_price (= usdc/raw, only meaningful on
+    success), slippage_pct_vs_observed (= executed - observed, signed),
+    slippage_pct_vs_sl (= executed - sl, signed). Negative values mean we
+    executed below the reference price; positive means above.
+    """
+    try:
+        executed_price = (executed_usdc / quantity_sold) if (success and quantity_sold > 0) else None
+
+        slip_vs_obs = None
+        slip_vs_sl  = None
+        if executed_price is not None:
+            if observed_price and observed_price > 0:
+                slip_vs_obs = ((executed_price - observed_price) / observed_price) * 100
+            if sl_price and sl_price > 0:
+                slip_vs_sl = ((executed_price - sl_price) / sl_price) * 100
+
+        conn = _db_rw()
+        try:
+            conn.execute(
+                """
+                INSERT INTO exit_attempts (
+                    position_id, action, retry_tier, requested_slippage_bps,
+                    observed_price, sl_price, tp25_price, tp50_price,
+                    pct_vs_entry, age_sec, quantity_sold, executed_usdc,
+                    executed_price, slippage_pct_vs_observed, slippage_pct_vs_sl,
+                    success, err_code, latency_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    position_id, action, retry_tier, requested_slippage_bps,
+                    observed_price, sl_price, tp25_price, tp50_price,
+                    pct_vs_entry, int(age_sec), quantity_sold, executed_usdc,
+                    executed_price, slip_vs_obs, slip_vs_sl,
+                    1 if success else 0, err_code, latency_ms,
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.warning("exit_attempts insert failed for pos=%s: %s", position_id, exc)
+
+
 def _time_stop_check(age_sec: float, pct_vs_entry: float) -> tuple[bool, str]:
     """S74 P1a: time-stop on losers.
 
@@ -433,16 +532,22 @@ def _evaluate_position(row: dict) -> None:
     now = time.time()
     last = _last_action_ts.get(pid, 0)
     if now - last < _ACTION_COOLDOWN_SECONDS:
+        _log_exit_poll(pid, observed_price=None, pct_vs_entry=None,
+                       age_sec=None, action_decided="cooldown")
         return
 
     # Chain dispatch - Solana and Base are live-tested (S49, S50).
     if chain not in ("solana", "base"):
         log.debug("Position #%d chain=%s unsupported by position_manager - skipping", pid, chain)
+        _log_exit_poll(pid, observed_price=None, pct_vs_entry=None,
+                       age_sec=None, action_decided="unsupported_chain")
         return
 
     price = _fetch_price_usd(chain, token_addr)
     if price is None:
         log.debug("Position #%d %s: no price available", pid, symbol)
+        _log_exit_poll(pid, observed_price=None, pct_vs_entry=None,
+                       age_sec=None, action_decided="no_price")
         return
 
     pct_vs_entry = ((price - entry) / entry) * 100
@@ -511,6 +616,12 @@ def _evaluate_position(row: dict) -> None:
             "Position #%d %s: price=$%.9f entry=$%.9f (%+.1f%%) SL=$%.9f TP25=$%.9f TP50=$%.9f — hold",
             pid, symbol, price, entry, pct_vs_entry, sl, tp25, tp50,
         )
+        # S74 P3: also captures the SL-suppressed-by-arming case via a
+        # distinct action_decided value, since price <= sl while !sl_armed
+        # falls through to the "else" hold branch.
+        decided = "sl_suppressed_arming" if (price <= sl and not sl_armed) else "hold"
+        _log_exit_poll(pid, observed_price=price, pct_vs_entry=pct_vs_entry,
+                       age_sec=age_sec, action_decided=decided)
         return
 
     # Lookup authoritative on-chain balance (qty_db can diverge — memecoins with tax, etc.)
@@ -545,6 +656,12 @@ def _evaluate_position(row: dict) -> None:
 
     _last_action_ts[pid] = now
 
+    # S74 P3: log the poll that produced this action decision before we
+    # enter the sell loop, so we have an exit_polls row even if the sell
+    # loop crashes mid-flight.
+    _log_exit_poll(pid, observed_price=price, pct_vs_entry=pct_vs_entry,
+                   age_sec=age_sec, action_decided=action.lower())
+
     # S55 P3: escalate slippage on SLIPPAGE error, retry immediately (no cooldown).
     # Schedule: base (default 500=5%), 1500 (15%), 3000 (30%). Monotonically increasing.
     # If operator sets POSITION_SELL_SLIPPAGE_BPS above a tier, that tier is skipped.
@@ -555,10 +672,32 @@ def _evaluate_position(row: dict) -> None:
     usdc_out = 0.0
     err_code: str | None = None
     for i, try_slip in enumerate(slippage_schedule):
+        # S74 P3: per-attempt latency timer for instrumentation
+        _attempt_t0 = time.time()
         if chain == "solana":
             success, usdc_out, err_code = _sell_solana(token_addr, sell_raw, symbol, try_slip)
         else:  # base
             success, usdc_out, err_code = _sell_base(token_addr, sell_raw, symbol, try_slip)
+        _attempt_latency_ms = int((time.time() - _attempt_t0) * 1000)
+
+        # S74 P3: log every attempt — successes, slippage failures, retries.
+        _log_exit_attempt(
+            pid,
+            action=action,
+            retry_tier=i,
+            requested_slippage_bps=try_slip,
+            observed_price=price,
+            sl_price=sl,
+            tp25_price=tp25,
+            tp50_price=tp50,
+            pct_vs_entry=pct_vs_entry,
+            age_sec=age_sec,
+            quantity_sold=qty_db * sell_fraction,
+            executed_usdc=usdc_out,
+            success=success,
+            err_code=err_code,
+            latency_ms=_attempt_latency_ms,
+        )
 
         if success:
             if i > 0:

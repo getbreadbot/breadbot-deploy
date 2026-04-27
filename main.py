@@ -115,6 +115,59 @@ async def _init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_pullback_token ON pullback_events(token_addr, created_at);
             CREATE INDEX IF NOT EXISTS idx_pullback_event ON pullback_events(event_type, created_at);
             CREATE INDEX IF NOT EXISTS idx_pullback_alert ON pullback_events(alert_id);
+            -- S74 P3: exit slippage instrumentation (two tables)
+            -- exit_polls: high-volume, one row per _evaluate_position call.
+            -- Captures observed price and the verdict so we can measure how
+            -- often we observed price below SL but didn't act (cooldown,
+            -- arming delay, dust, etc.) and how the polling cadence is
+            -- distributed in time.
+            CREATE TABLE IF NOT EXISTS exit_polls (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id     INTEGER NOT NULL,
+                polled_at       TEXT NOT NULL DEFAULT (datetime('now')),
+                observed_price  REAL,
+                pct_vs_entry    REAL,
+                age_sec         INTEGER,
+                action_decided  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_exit_polls_position
+                ON exit_polls(position_id, polled_at);
+            CREATE INDEX IF NOT EXISTS idx_exit_polls_action
+                ON exit_polls(action_decided, polled_at);
+
+            -- exit_attempts: one row per real Jupiter/Odos sell call,
+            -- including each retry tier in the slippage escalation chain.
+            -- Captures the slippage gap (observed_price vs sl_price) and
+            -- the executed price (usdc_out / sell_raw) so we can attribute
+            -- losses to polling-latency vs price-feed-lag vs LP-slippage.
+            CREATE TABLE IF NOT EXISTS exit_attempts (
+                id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                position_id             INTEGER NOT NULL,
+                attempted_at            TEXT NOT NULL DEFAULT (datetime('now')),
+                action                  TEXT NOT NULL,
+                retry_tier              INTEGER NOT NULL DEFAULT 0,
+                requested_slippage_bps  INTEGER,
+                observed_price          REAL,
+                sl_price                REAL,
+                tp25_price              REAL,
+                tp50_price              REAL,
+                pct_vs_entry            REAL,
+                age_sec                 INTEGER,
+                quantity_sold           REAL,
+                executed_usdc           REAL,
+                executed_price          REAL,
+                slippage_pct_vs_observed REAL,
+                slippage_pct_vs_sl      REAL,
+                success                 INTEGER NOT NULL DEFAULT 0,
+                err_code                TEXT,
+                latency_ms              INTEGER
+            );
+            CREATE INDEX IF NOT EXISTS idx_exit_attempts_position
+                ON exit_attempts(position_id, attempted_at);
+            CREATE INDEX IF NOT EXISTS idx_exit_attempts_action
+                ON exit_attempts(action, attempted_at);
+            CREATE INDEX IF NOT EXISTS idx_exit_attempts_success
+                ON exit_attempts(success, attempted_at);
         """)
 
         # ── S57 P3 Phase 4: the `trades` table is deprecated. Position buy/sell
