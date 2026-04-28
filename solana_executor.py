@@ -88,6 +88,12 @@ def get_quote(
         "outputMint":  output_mint,
         "amount":      amount_lamports,
         "slippageBps": slippage,
+        # S75 P1: cap route complexity so transactions stay under Solana's 1232-byte
+        # raw limit (~1644 bytes base64). Without this, Jupiter occasionally returns
+        # multi-hop routes that build to 1644-1704 bytes serialized, which both Jito
+        # and standard RPC reject as "decoded too large", causing SL bleeds while
+        # the bot retries the same oversized payload through cooldown loops.
+        "maxAccounts": 20,
     }
     resp = requests.get(JUPITER_QUOTE_URL, params=params, timeout=10)
     resp.raise_for_status()
