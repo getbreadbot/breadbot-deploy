@@ -394,7 +394,7 @@ a:hover { text-decoration: underline; }
   padding: 9px 12px;
   color: var(--text);
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: 16px;            /* 16px+ prevents iOS Safari auto-zoom on focus */
   transition: border-color 0.15s;
   outline: none;
 }
@@ -518,6 +518,7 @@ a:hover { text-decoration: underline; }
   border-radius: var(--radius-lg);
   padding: 28px 32px;
   width: 420px;
+  max-width: calc(100vw - 32px);   /* don't overflow iPhone SE (375px) */
   box-shadow: var(--shadow);
 }
 .modal-title { font-size: 16px; font-weight: 600; margin-bottom: 10px; }
@@ -625,6 +626,15 @@ a:hover { text-decoration: underline; }
   .nav-link {
     padding: 12px 20px;
     font-size: 14px;
+  }
+
+  /* .btn-sm tap targets — 22px desktop height fails 44px Apple HIG / 48px
+     Material minimums. Bump padding so Close/Skip/Chart/BUY in tables clear
+     the threshold on phones. iPhone SE override below tightens .header .btn-sm
+     specifically to fit the cramped header bar. */
+  .btn-sm {
+    padding: 10px 14px;
+    font-size: 13px;
   }
 
   /* Header tightening on mobile */
