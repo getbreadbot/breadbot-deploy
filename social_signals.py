@@ -211,6 +211,52 @@ def _persist_multichannel_hit(addr: str, channel_count: int, channels: list[str]
 _SOL_ADDR_RE  = re.compile(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b')
 _EVM_ADDR_RE  = re.compile(r'\b0x[0-9a-fA-F]{40}\b')
 
+# ── CallAnalyser message body patterns (S80 P2) ──────────────────────────────
+# Examples from real messages:
+#   "Score: 31/100 | $PEPX got first call..."
+#   "Score: 60/100 | $1000x +1 call..."
+#   "CPW: 439/1000"
+_SCORE_RE     = re.compile(r'Score:\s*(\d{1,3})\s*/\s*100')
+_CPW_RE       = re.compile(r'CPW:\s*(\d{1,4})\s*/\s*1000')
+
+
+def _score_tier_boost(score: int | None, cpw: int | None) -> tuple[int, str]:
+    """
+    S80 P2: Score-based tiering for trusted-channel alpha hits.
+    Replaces the dead CPW<200 plan from the S79 handoff with empirically-anchored
+    tiers from the 60-message Telethon sample (docs/s79-research.md section 3).
+
+    Tiers (additive on top of base trusted-channel boost):
+      Score >= 95              → +8  (top 7% of CallAnalyser calls)
+      Score >= 85              → +5  (top 12%)
+      Score 60-84              → +3
+      Score < 60 / unknown     → +1  baseline
+    Bonus:
+      CPW < 350 AND Score >= 60 → +2 (sharp signal from low-volume callers)
+
+    Returns (boost, label) where label is short text for the flag string.
+    Score=None means message body had no Score field (non-CallAnalyser channel).
+    """
+    if score is None:
+        # No Score in message — treat as baseline (other channels keep current behavior)
+        return 0, ""
+
+    if score >= 95:
+        boost, tier = 8, f"Score>=95 ({score})"
+    elif score >= 85:
+        boost, tier = 5, f"Score>=85 ({score})"
+    elif score >= 60:
+        boost, tier = 3, f"Score 60-84 ({score})"
+    else:
+        boost, tier = 1, f"Score<60 ({score})"
+
+    # CPW bonus: sharp signal from busy-but-not-spammy callers
+    if cpw is not None and cpw < 350 and score >= 60:
+        boost += 2
+        tier += f" + CPW<350 ({cpw})"
+
+    return boost, tier
+
 # ── Arkham Intelligence ───────────────────────────────────────────────────────
 
 async def get_arkham_wallet_activity(
@@ -402,17 +448,25 @@ async def monitor_alpha_channels() -> None:
             evm_addrs = _EVM_ADDR_RE.findall(text)
             found = [a.lower() for a in sol_addrs + evm_addrs]
 
+            # S80 P2: parse Score and CPW from CallAnalyser message body.
+            # Returns None for channels that don't use this format.
+            score_match = _SCORE_RE.search(text)
+            cpw_match   = _CPW_RE.search(text)
+            score_val   = int(score_match.group(1)) if score_match else None
+            cpw_val     = int(cpw_match.group(1))   if cpw_match   else None
+
             async with _alpha_lock:
                 for addr in found:
-                    # Trim old hits outside the window
+                    # Trim old hits outside the window. Tolerate legacy 2-tuples
+                    # for backward compat during the first scanner restart after deploy.
                     _alpha_hits[addr] = [
-                        (ch, ts) for ch, ts in _alpha_hits[addr]
-                        if now - ts < ALPHA_WINDOW_SECONDS
+                        h for h in _alpha_hits[addr]
+                        if now - h[1] < ALPHA_WINDOW_SECONDS
                     ]
                     # Add this hit if channel not already recorded in window
-                    existing_channels = {ch for ch, _ in _alpha_hits[addr]}
+                    existing_channels = {h[0] for h in _alpha_hits[addr]}
                     if channel_id not in existing_channels:
-                        _alpha_hits[addr].append((channel_id, now))
+                        _alpha_hits[addr].append((channel_id, now, score_val, cpw_val))
                         channels_count = len(_alpha_hits[addr])
                         crossed_threshold = (
                             channels_count == ALPHA_MIN_CHANNELS  # only at the moment we cross
@@ -425,7 +479,7 @@ async def monitor_alpha_channels() -> None:
                             # Persist event so panel /signals page picks it up
                             _persist_multichannel_hit(
                                 addr, channels_count,
-                                [ch for ch, _ in _alpha_hits[addr]],
+                                [h[0] for h in _alpha_hits[addr]],
                             )
                             # Broadcast to all registered buyers
                             msg = _format_alpha_broadcast(addr, channels_count, text)
@@ -540,30 +594,64 @@ def get_alpha_channel_boost(token_addr: str) -> tuple[int, list[str]]:
     """
     Synchronous check — safe to call from scanner's process_pair().
     Returns (score_boost, flags).
-    Boost is ALPHA_SIGNAL_BOOST if the token appeared in 2+ alpha channels
-    within the last ALPHA_WINDOW_SECONDS seconds.
+
+    Layered scoring (S80 P2):
+      Multi-channel hit (>=2 channels in window): ALPHA_SIGNAL_BOOST flat
+      Single trusted-channel hit: ALPHA_TRUSTED_BOOST + Score-based tier on top
+        Tiers: Score>=95 +8, >=85 +5, 60-84 +3, <60 +1, CPW<350 bonus +2
     """
     addr_lower = token_addr.lower()
     now = time.time()
 
-    hits = [
-        (ch, ts) for ch, ts in _alpha_hits.get(addr_lower, [])
-        if now - ts < ALPHA_WINDOW_SECONDS
-    ]
-    unique_channels = len({ch for ch, _ in hits})
+    # Tolerate legacy 2-tuples during deploy transition
+    hits = []
+    for h in _alpha_hits.get(addr_lower, []):
+        if now - h[1] >= ALPHA_WINDOW_SECONDS:
+            continue
+        ch    = h[0]
+        score = h[2] if len(h) >= 3 else None
+        cpw   = h[3] if len(h) >= 4 else None
+        hits.append((ch, score, cpw))
+
+    unique_channels = len({ch for ch, _, _ in hits})
 
     if unique_channels >= ALPHA_MIN_CHANNELS:
+        # Multi-channel base boost — also layer Score tier from best Score we saw
         flags = [f"+{ALPHA_SIGNAL_BOOST} MULTI_CHANNEL_ALPHA ({unique_channels} channels)"]
-        return ALPHA_SIGNAL_BOOST, flags
+        boost = ALPHA_SIGNAL_BOOST
 
-    # Single trusted-channel hit — still earns a smaller boost
+        # Use the highest Score from any contributing hit
+        scored_hits = [(s, c) for _, s, c in hits if s is not None]
+        if scored_hits:
+            best_score, paired_cpw = max(scored_hits, key=lambda x: x[0])
+            tier_boost, tier_label = _score_tier_boost(best_score, paired_cpw)
+            if tier_boost:
+                boost += tier_boost
+                flags.append(f"+{tier_boost} {tier_label}")
+
+        return boost, flags
+
+    # Single trusted-channel hit — still earns a smaller boost + Score tier
     if ALPHA_TRUSTED_IDS:
-        hit_channels = {ch for ch, _ in hits}
+        hit_channels = {ch for ch, _, _ in hits}
         trusted_hits = hit_channels & ALPHA_TRUSTED_IDS
         if trusted_hits:
             label = ", ".join(trusted_hits)
             flags = [f"+{ALPHA_TRUSTED_BOOST} Trusted channel signal ({label})"]
-            return ALPHA_TRUSTED_BOOST, flags
+            boost = ALPHA_TRUSTED_BOOST
+
+            # Layer Score tier — pull Score/CPW from any trusted hit on this addr
+            trusted_score_hits = [
+                (s, c) for ch, s, c in hits if ch in trusted_hits and s is not None
+            ]
+            if trusted_score_hits:
+                best_score, paired_cpw = max(trusted_score_hits, key=lambda x: x[0])
+                tier_boost, tier_label = _score_tier_boost(best_score, paired_cpw)
+                if tier_boost:
+                    boost += tier_boost
+                    flags.append(f"+{tier_boost} {tier_label}")
+
+            return boost, flags
 
     return 0, []
 
