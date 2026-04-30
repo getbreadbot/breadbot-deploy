@@ -93,7 +93,7 @@ def get_quote(
         # multi-hop routes that build to 1644-1704 bytes serialized, which both Jito
         # and standard RPC reject as "decoded too large", causing SL bleeds while
         # the bot retries the same oversized payload through cooldown loops.
-        "maxAccounts": 32,
+        "maxAccounts": 64,
     }
     resp = requests.get(JUPITER_QUOTE_URL, params=params, timeout=10)
     resp.raise_for_status()
