@@ -72,6 +72,57 @@ function StatRow({ label, value, danger }) {
   )
 }
 
+// ── Copyable contract address row + chart link ────────────────────────────
+function CopyableAddress({ address, chain }) {
+  const [copied, setCopied] = useState(false)
+  const handleCopy = () => {
+    navigator.clipboard.writeText(address).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1400)
+    }).catch(() => {})
+  }
+  // Solana addresses are base58 (no 0x); Base addresses are 0x... hex.
+  const dexUrl = chain === 'solana'
+    ? `https://dexscreener.com/solana/${address}`
+    : `https://dexscreener.com/base/${address}`
+  return (
+    <div style={{ borderBottom: '1px solid var(--bg-3)', padding: '8px 0' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between',
+                    alignItems: 'center', marginBottom: 4 }}>
+        <span style={{ color: 'var(--text-3)', fontSize: 13 }}>Contract</span>
+        <button
+          onClick={handleCopy}
+          style={{ fontSize: 11, padding: '2px 8px', borderRadius: 4,
+                   border: '1px solid var(--bg-3)',
+                   background: copied ? '#16a34a' : 'var(--bg-2)',
+                   color: copied ? '#fff' : 'var(--text-2)',
+                   cursor: 'pointer' }}
+          title="Copy full contract address">
+          {copied ? '✓ Copied' : 'Copy'}
+        </button>
+      </div>
+      <div
+        onClick={handleCopy}
+        title={address + ' (click to copy)'}
+        style={{ fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                 fontSize: 12, color: 'var(--text-1)',
+                 background: 'var(--bg-2)', padding: '6px 8px',
+                 borderRadius: 4, lineHeight: 1.4, cursor: 'pointer',
+                 userSelect: 'all' }}>
+        {address.length > 16
+          ? address.slice(0, 8) + '…' + address.slice(-6)
+          : address}
+      </div>
+      <div style={{ marginTop: 6 }}>
+        <a href={dexUrl} target="_blank" rel="noopener noreferrer"
+           style={{ fontSize: 12, color: '#60a5fa', textDecoration: 'none' }}>
+          📈 View chart on DEXScreener →
+        </a>
+      </div>
+    </div>
+  )
+}
+
 // ── Watchlist sidebar ─────────────────────────────────────────────────────
 function WatchlistPanel({ items, onSelect, onRemove }) {
   if (IS_DEMO) return null
@@ -305,6 +356,7 @@ export default function Research() {
               {/* DEXScreener block */}
               <div className="card" style={{ marginBottom: 16 }}>
                 <div className="card-title">DEXScreener — Token info</div>
+                <CopyableAddress address={data.token_addr} chain={data.chain} />
                 {dex.name || dex.symbol
                   ? <>
                       {dex.name   && <StatRow label="Name"       value={dex.name} />}
