@@ -41,7 +41,7 @@ load_dotenv(Path(__file__).parent / ".env")
 
 log = logging.getLogger(__name__)
 
-_DB_PATH = Path(__file__).parent / "breadbot.db"
+_DB_PATH = Path(__file__).parent / "data" / "cryptobot.db"
 
 
 # ── Channel DB helpers ────────────────────────────────────────────────────────
@@ -160,6 +160,52 @@ ARKHAM_LOOKBACK_HOURS  = 6     # hours of Arkham history to check
 # Structure: { token_addr_lower: [(channel_id, timestamp), ...] }
 _alpha_hits: dict[str, list[tuple[str, float]]] = defaultdict(list)
 _alpha_lock = asyncio.Lock()
+
+
+def _persist_multichannel_hit(addr: str, channel_count: int, channels: list[str]) -> None:
+    """
+    Persist a MULTI_CHANNEL_ALPHA event to alt_data_signals so the panel
+    Signal Channels page (/signals) and the MCP "hits" endpoint can read it.
+
+    One row per multi-channel event (per-event semantics, not per-mention).
+    Failures are swallowed — persistence is best-effort and must never
+    interfere with the live signal flow.
+    """
+    try:
+        with sqlite3.connect(_DB_PATH) as con:
+            # Ensure table exists with the schema mcp_server.manage_alpha_channels expects.
+            con.execute("""
+                CREATE TABLE IF NOT EXISTS alt_data_signals (
+                    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp          TEXT    NOT NULL DEFAULT (datetime('now')),
+                    source             TEXT    NOT NULL,
+                    signal_type        TEXT,
+                    market_id          TEXT,
+                    description        TEXT,
+                    value              REAL,
+                    value_shift        REAL,
+                    composite_score    REAL,
+                    scanner_triggered  INTEGER DEFAULT 0
+                )
+            """)
+            con.execute(
+                """INSERT INTO alt_data_signals
+                   (source, signal_type, market_id, description, value, value_shift, scanner_triggered)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    "alpha_channel",
+                    "multi_channel_alpha",
+                    addr,
+                    f"Spotted in {channel_count} channels: {', '.join(channels[:3])}",
+                    float(channel_count),
+                    float(ALPHA_SIGNAL_BOOST),
+                    1,
+                ),
+            )
+            con.commit()
+    except Exception as exc:
+        log.warning("social_signals: persist multi-channel hit failed: %s", exc)
+
 
 # ── Solana + EVM contract address patterns ────────────────────────────────────
 _SOL_ADDR_RE  = re.compile(r'\b[1-9A-HJ-NP-Za-km-z]{32,44}\b')
@@ -313,11 +359,28 @@ async def monitor_alpha_channels() -> None:
         client = TelegramClient(StringSession(TELEGRAM_SESSION), tg_api_id, tg_api_hash)
         await client.connect()
 
-        # Resolve channel entities
+        # Prime Telethon entity cache so private/joined channels resolve cleanly.
+        # Without this, get_entity() on a numeric -100xxx ID can fail with
+        # "Could not find the input entity" even when the user account is a member.
+        try:
+            async for _dialog in client.iter_dialogs(limit=200):
+                pass
+            log.info("social_signals: dialog cache primed")
+        except Exception as exc:
+            log.warning("social_signals: dialog priming failed (continuing anyway): %s", exc)
+
+        # Resolve channel entities. Accepts both numeric IDs ("-1001234567890")
+        # and public usernames ("@callanalysersol" or "callanalysersol").
         channel_entities = []
         for ch_id in db_channel_ids:
+            target = ch_id
             try:
-                entity = await client.get_entity(int(ch_id))
+                # Numeric IDs are passed as int; usernames stay as strings.
+                if target.lstrip("-").isdigit():
+                    entity = await client.get_entity(int(target))
+                else:
+                    # Strip leading @ if present for telethon
+                    entity = await client.get_entity(target.lstrip("@"))
                 channel_entities.append(entity)
                 log.info("social_signals: monitoring channel %s", ch_id)
             except Exception as exc:
@@ -351,10 +414,18 @@ async def monitor_alpha_channels() -> None:
                     if channel_id not in existing_channels:
                         _alpha_hits[addr].append((channel_id, now))
                         channels_count = len(_alpha_hits[addr])
-                        if channels_count >= ALPHA_MIN_CHANNELS:
+                        crossed_threshold = (
+                            channels_count == ALPHA_MIN_CHANNELS  # only at the moment we cross
+                        )
+                        if crossed_threshold:
                             log.info(
                                 "social_signals: MULTI_CHANNEL_ALPHA %s in %d channels",
                                 addr[:16], channels_count
+                            )
+                            # Persist event so panel /signals page picks it up
+                            _persist_multichannel_hit(
+                                addr, channels_count,
+                                [ch for ch, _ in _alpha_hits[addr]],
                             )
                             # Broadcast to all registered buyers
                             msg = _format_alpha_broadcast(addr, channels_count, text)
