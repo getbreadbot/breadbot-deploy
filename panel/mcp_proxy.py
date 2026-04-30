@@ -321,6 +321,122 @@ async def _fetch_live_prices(tokens_by_chain: dict) -> dict:
     return prices
 
 
+# ── S78 P4: OHLCV chart cache state ──────────────────────────────────────────
+_OHLCV_POOL_CACHE: dict = {}                  # (chain, token_addr) -> pool_addr
+_OHLCV_CANDLES_CACHE: dict = {}               # (chain, token_addr) -> (ts, payload)
+_OHLCV_TTL_SECONDS = 60
+_OHLCV_DB_PATH = "/opt/projects/breadbot/data/cryptobot.db"
+
+
+async def _resolve_pool_address(chain: str, token_addr: str) -> str:
+    """Look up the top pool for this token on GeckoTerminal. Cached forever."""
+    key = (chain, token_addr)
+    cached = _OHLCV_POOL_CACHE.get(key)
+    if cached is not None:
+        return cached
+
+    network = "solana" if chain == "solana" else "base"
+    url = f"https://api.geckoterminal.com/api/v2/networks/{network}/tokens/{token_addr}/pools"
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get(url, headers={"Accept": "application/json"})
+            if r.status_code != 200:
+                _OHLCV_POOL_CACHE[key] = ""
+                return ""
+            pools = (r.json() or {}).get("data") or []
+            pool_addr = pools[0]["attributes"]["address"] if pools else ""
+            _OHLCV_POOL_CACHE[key] = pool_addr
+            return pool_addr
+        except Exception:
+            _OHLCV_POOL_CACHE[key] = ""
+            return ""
+
+
+async def _fetch_ohlcv(chain: str, token_addr: str) -> dict:
+    """Fetch last ~96 fifteen-minute candles (~24h) for a token."""
+    pool_addr = await _resolve_pool_address(chain, token_addr)
+    if not pool_addr:
+        return {"candles": [], "error": "no_pool"}
+
+    network = "solana" if chain == "solana" else "base"
+    url = (
+        f"https://api.geckoterminal.com/api/v2/networks/{network}"
+        f"/pools/{pool_addr}/ohlcv/minute"
+        f"?aggregate=15&limit=96&currency=usd"
+    )
+    async with httpx.AsyncClient(timeout=10) as client:
+        try:
+            r = await client.get(url, headers={"Accept": "application/json"})
+            if r.status_code != 200:
+                return {"candles": [], "error": f"http_{r.status_code}"}
+            ohlcv = (r.json() or {}).get("data", {}).get("attributes", {}).get("ohlcv_list") or []
+            # GeckoTerminal returns descending by time; flip to ascending and reshape.
+            candles = [
+                {"t": int(c[0]), "o": float(c[1]), "h": float(c[2]),
+                 "l": float(c[3]), "c": float(c[4]), "v": float(c[5])}
+                for c in reversed(ohlcv)
+            ]
+            return {"candles": candles, "error": None}
+        except Exception as exc:
+            return {"candles": [], "error": str(exc)[:80]}
+
+
+@router.get("/positions/{position_id}/ohlcv")
+async def get_position_ohlcv(position_id: int, auth=Depends(verify_session)):
+    """
+    Return 24h of 15-minute OHLCV candles for a specific position, plus
+    overlay levels (entry, SL, TP25, TP50) from the positions row.
+    Cached 60s per token.
+    """
+    # 1. Read position row (chain + token_addr + overlay levels)
+    try:
+        conn = _ohlcv_sqlite.connect(f"file:{_OHLCV_DB_PATH}?mode=ro", uri=True)
+        try:
+            row = conn.execute(
+                """SELECT chain, token_addr, entry_price, stop_loss_usd,
+                          take_profit_25, take_profit_50, status
+                     FROM positions WHERE id = ?""",
+                (position_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"db_error: {exc}")
+
+    if not row:
+        raise HTTPException(status_code=404, detail=f"position {position_id} not found")
+
+    chain, token_addr, entry, sl, tp25, tp50, status = row
+    if not chain or not token_addr:
+        raise HTTPException(status_code=400, detail="position has no chain/token_addr")
+
+    # 2. Cache check
+    cache_key = (chain, token_addr)
+    now = _ohlcv_time.time()
+    cached = _OHLCV_CANDLES_CACHE.get(cache_key)
+    stale_seconds = 0
+    if cached and (now - cached[0] < _OHLCV_TTL_SECONDS):
+        payload = cached[1]
+        stale_seconds = int(now - cached[0])
+    else:
+        payload = await _fetch_ohlcv(chain, token_addr)
+        _OHLCV_CANDLES_CACHE[cache_key] = (now, payload)
+
+    # 3. Return with overlay levels mirrored
+    return {
+        "candles":         payload.get("candles") or [],
+        "error":           payload.get("error"),
+        "entry_price":     entry,
+        "stop_loss":       sl,
+        "take_profit_25":  tp25,
+        "take_profit_50":  tp50,
+        "status":          status,
+        "stale_seconds":   stale_seconds,
+        "chain":           chain,
+        "token_addr":      token_addr,
+    }
+
+
 @router.get("/positions")
 async def get_positions(auth=Depends(verify_session)):
     data = await call_tool("get_positions")

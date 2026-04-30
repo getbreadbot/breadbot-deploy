@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { get, post } from '../lib/api.js'
+import PriceChart from '../components/PriceChart.jsx'
 
 function ConfirmModal({ position, onConfirm, onCancel }) {
   return (
@@ -25,7 +26,8 @@ function ConfirmModal({ position, onConfirm, onCancel }) {
 export default function Positions() {
   const [positions, setPositions] = useState([])
   const [loading, setLoading] = useState(true)
-  const [closing, setClosing] = useState(null) // position being confirmed
+  const [closing, setClosing] = useState(null)        // position being confirmed for close
+  const [expandedId, setExpandedId] = useState(null)  // id of row whose chart is open
 
   async function load() {
     try {
@@ -106,8 +108,9 @@ export default function Positions() {
                 const pnlPct = p.entry_price && p.current_price
                   ? ((p.current_price - p.entry_price) / p.entry_price * 100)
                   : null
+                const isExpanded = expandedId === p.id
 
-                return (
+                return [
                   <tr key={p.id}>
                     <td>
                       <div className="mono" style={{ fontWeight: 600 }}>{p.token}</div>
@@ -125,7 +128,7 @@ export default function Positions() {
                     </td>
                     <td className="mono">${p.value_usd?.toFixed(2) ?? '—'}</td>
                     <td>
-                      <span className={`mono ${p.pnl_usd >= 0 ? '' : ''}`}
+                      <span className="mono"
                         style={{ color: p.pnl_usd >= 0 ? 'var(--green)' : 'var(--red)' }}
                       >
                         {p.pnl_usd >= 0 ? '+' : ''}${p.pnl_usd?.toFixed(2) ?? '—'}
@@ -136,7 +139,15 @@ export default function Positions() {
                         )}
                       </span>
                     </td>
-                    <td>
+                    <td style={{ whiteSpace: 'nowrap' }}>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        title={isExpanded ? 'Hide chart' : 'Show chart'}
+                        onClick={() => setExpandedId(isExpanded ? null : p.id)}
+                        style={{ marginRight: 6 }}
+                      >
+                        {isExpanded ? '▴ Chart' : '▾ Chart'}
+                      </button>
                       <button
                         className="btn btn-ghost btn-sm"
                         onClick={() => setClosing(p)}
@@ -145,8 +156,15 @@ export default function Positions() {
                         Close
                       </button>
                     </td>
-                  </tr>
-                )
+                  </tr>,
+                  isExpanded && (
+                    <tr key={`chart-${p.id}`} className="chart-row">
+                      <td colSpan={8} style={{ padding: '12px 16px', background: 'var(--bg-2)' }}>
+                        <PriceChart positionId={p.id} />
+                      </td>
+                    </tr>
+                  ),
+                ]
               })}
             </tbody>
           </table>
