@@ -190,6 +190,7 @@ async def maybe_pullback(
 
     token_addr = pair["token_addr"]
     symbol     = pair.get("symbol", "UNKNOWN")
+    token_name = pair.get("token_name", "")
     chain      = pair.get("chain", "solana")
     alert_price = float(pair.get("price_usd", 0))
 
@@ -232,9 +233,11 @@ async def maybe_pullback(
     )
 
     # Notify operator
+    from scanner import _format_token_label
+    _label = _format_token_label(symbol, token_name)
     await send_message(
         tg_client,
-        f"⏳ Pullback monitor started: {symbol} ({chain.upper()})\n"
+        f"⏳ Pullback monitor started: {_label} ({chain.upper()})\n"
         f"Alert price: ${alert_price:.8f}\n"
         f"Target entry: ${target:.8f} (-{pct}%)\n"
         f"Timeout: {timeout_m:.0f} min | Fallback: {fallback_mode()}",

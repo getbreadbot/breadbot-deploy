@@ -515,6 +515,7 @@ def _evaluate_position(row: dict) -> None:
     """Check one open position against its SL/TP levels and act if breached."""
     pid = row["id"]
     symbol = row["symbol"]
+    token_name = row.get("token_name") or ""
     chain = row["chain"]
     token_addr = row["token_addr"]
     entry = float(row["entry_price"] or 0)
@@ -716,8 +717,10 @@ def _evaluate_position(row: dict) -> None:
     if not success:
         log.warning("Position #%d %s: %s sell did not confirm (err=%s, last_slippage=%dbps) — will retry after cooldown",
                     pid, symbol, action, err_code, try_slip)
+        from scanner import _format_token_label
+        _label_fail = _format_token_label(symbol, token_name)
         _send_telegram(
-            f"⚠️ Position Manager: {action} trigger failed for {symbol} (#{pid})\n"
+            f"⚠️ Position Manager: {action} trigger failed for {_label_fail} (#{pid})\n"
             f"price=${price:.9f} entry=${entry:.9f} ({pct_vs_entry:+.1f}%)\n"
             f"err={err_code} last_slippage={try_slip}bps\n"
             f"Will retry in {_ACTION_COOLDOWN_SECONDS}s. Inspect logs."
@@ -733,8 +736,10 @@ def _evaluate_position(row: dict) -> None:
     remaining_cost_fraction = 0.5 if partial_done else 1.0
     cost_attributed = cost * remaining_cost_fraction * sell_fraction
     realized_pnl = usdc_out - cost_attributed
+    from scanner import _format_token_label as _fmt_exit
+    _label_exit = _fmt_exit(symbol, token_name)
     _send_telegram(
-        f"🔔 *Position Manager*: {action} exit — {symbol} (#{pid})\n"
+        f"🔔 *Position Manager*: {action} exit — {_label_exit} (#{pid})\n"
         f"price=${price:.9f} entry=${entry:.9f} ({pct_vs_entry:+.1f}%)\n"
         f"sold {sell_fraction*100:.0f}% → ${usdc_out:.2f} USDC\n"
         f"realized vs pro-rata cost: ${realized_pnl:+.2f}"

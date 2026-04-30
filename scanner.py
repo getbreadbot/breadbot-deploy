@@ -266,6 +266,25 @@ def _chain_label(chain: str) -> str:
     return "Solana" if chain == "solana" else "Base"
 
 
+def _format_token_label(symbol, token_name) -> str:
+    """
+    Standardised token label for operator-facing notifications.
+
+    - Both present, distinct  -> 'The Chosen One ($Cayaha)'
+    - Only symbol / names match -> '$Cayaha'
+    - Neither                  -> '$?'
+    """
+    sym = (symbol or "").strip()
+    name = (token_name or "").strip()
+    if name and sym and name.lower() != sym.lower():
+        return f"{name} (${sym})"
+    if sym:
+        return f"${sym}"
+    if name:
+        return name
+    return "$?"
+
+
 def _flags_text(flags: list[str]) -> str:
     return "\n".join(f"  {f}" for f in flags) if flags else "  None"
 
@@ -280,8 +299,8 @@ def _fallback_position(score: int) -> float:
 def build_auto_buy_message(pair: dict, score: int, flags: list[str], result) -> str:
     return (
         f"AUTO-EXECUTED [{result.strategy.upper()}]\n\n"
-        f"{_chain_label(pair['chain'])} | {pair.get('symbol','?')} "
-        f"- {pair.get('token_name','')}\n"
+        f"{_chain_label(pair['chain'])} | "
+        f"{_format_token_label(pair.get('symbol'), pair.get('token_name'))}\n"
         f"{pair['token_addr']}\n\n"
         f"Price:       ${pair.get('price_usd', 0):.8f}\n"
         f"Liquidity:   ${pair.get('liquidity', 0):,.0f}\n"
@@ -299,8 +318,8 @@ def build_approval_message(pair: dict, score: int, flags: list[str], result) -> 
     position = result.position_usd if result.position_usd > 0 else _fallback_position(score)
     text = (
         f"NEW ALERT\n\n"
-        f"{_chain_label(pair['chain'])} | {pair.get('symbol','?')} "
-        f"- {pair.get('token_name','')}\n"
+        f"{_chain_label(pair['chain'])} | "
+        f"{_format_token_label(pair.get('symbol'), pair.get('token_name'))}\n"
         f"{pair['token_addr']}\n\n"
         f"Price:       ${pair.get('price_usd', 0):.8f}\n"
         f"Liquidity:   ${pair.get('liquidity', 0):,.0f}\n"
