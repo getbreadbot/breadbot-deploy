@@ -529,3 +529,129 @@ a:hover { text-decoration: underline; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--bg-3); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--border-hi); }
+
+/* ── S78 P3: Mobile hamburger + drawer ──────────────────────────────────── */
+
+/* Hamburger button — hidden on desktop, shown on mobile */
+.hamburger {
+  display: none;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  width: 36px;
+  height: 36px;
+  margin-right: 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, border-color 0.15s;
+}
+.hamburger:hover {
+  background: var(--bg-2);
+  border-color: var(--border);
+}
+.hamburger:active {
+  background: var(--amber-glow);
+}
+.hamburger span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: var(--text-2);
+  border-radius: 1px;
+  transition: background 0.15s;
+}
+.hamburger:hover span { background: var(--amber); }
+
+.nav-backdrop {
+  display: none;
+}
+
+/* Mobile breakpoint — 768px and below */
+@media (max-width: 768px) {
+  /* Single-column layout — header full width, main takes the rest */
+  .layout {
+    grid-template-columns: 1fr;
+    grid-template-rows: 48px 1fr;
+    grid-template-areas:
+      "header"
+      "main";
+  }
+
+  /* Show hamburger */
+  .hamburger {
+    display: flex;
+  }
+
+  /* Sidebar becomes a slide-out drawer, off-screen by default */
+  .nav {
+    position: fixed;
+    top: 48px;                       /* below header */
+    left: 0;
+    bottom: 0;
+    width: 260px;
+    max-width: 80vw;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease-out;
+    z-index: 50;
+    border-right: 1px solid var(--border);
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+  }
+  .nav.nav-mobile-open {
+    transform: translateX(0);
+  }
+
+  /* Backdrop scrim — only present in DOM when drawer is open */
+  .nav-backdrop {
+    display: block;
+    position: fixed;
+    top: 48px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 40;
+    animation: fadein 0.18s ease-out;
+  }
+  @keyframes fadein {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
+
+  /* Tap targets sized for fingers */
+  .nav-link {
+    padding: 12px 20px;
+    font-size: 14px;
+  }
+
+  /* Header tightening on mobile */
+  .header {
+    padding: 0 12px;
+    gap: 8px;
+  }
+  .header-logo {
+    font-size: 13px;
+  }
+  .header-status span {
+    display: none;          /* keep just the dot to save space */
+  }
+
+  /* Main content padding */
+  .main {
+    padding: 16px;
+  }
+}
+
+/* iPhone SE / very small screens — extra tightening */
+@media (max-width: 380px) {
+  .header-logo {
+    font-size: 12px;
+  }
+  .header .btn-sm {
+    font-size: 11px;
+    padding: 4px 8px;
+  }
+}

@@ -1,4 +1,4 @@
-import { Outlet, NavLink, useNavigate } from 'react-router-dom'
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom'
 import { useState, useEffect } from 'react'
 import { get, post } from '../lib/api.js'
 
@@ -24,8 +24,10 @@ const NAV_SYSTEM = [
 
 export default function Layout() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [botStatus, setBotStatus] = useState(null)
   const [pendingAlerts, setPendingAlerts] = useState(0)
+  const [mobileNavOpen, setMobileNavOpen] = useState(false)
 
   useEffect(() => {
     async function fetchStatus() {
@@ -41,7 +43,7 @@ export default function Layout() {
 
   // Listen for WebSocket alert count
   useEffect(() => {
-    const ws = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/api/ws/alerts`)
+    const ws = new WebSocket(`${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/api/ws/alerts`)
     ws.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data)
@@ -51,6 +53,21 @@ export default function Layout() {
     }
     return () => ws.close()
   }, [])
+
+  // Auto-close mobile drawer on route change
+  useEffect(() => {
+    setMobileNavOpen(false)
+  }, [location.pathname])
+
+  // Lock body scroll when drawer is open on mobile
+  useEffect(() => {
+    if (mobileNavOpen) {
+      document.body.style.overflow = 'hidden'
+    } else {
+      document.body.style.overflow = ''
+    }
+    return () => { document.body.style.overflow = '' }
+  }, [mobileNavOpen])
 
   async function logout() {
     await post('/auth/logout')
@@ -67,6 +84,14 @@ export default function Layout() {
   return (
     <div className="layout">
       <header className="header">
+        <button
+          className="hamburger"
+          aria-label={mobileNavOpen ? 'Close navigation' : 'Open navigation'}
+          aria-expanded={mobileNavOpen}
+          onClick={() => setMobileNavOpen(o => !o)}
+        >
+          <span /><span /><span />
+        </button>
         <span className="header-logo">⬡ BREADBOT</span>
         <span className="header-sep" />
         <div className="header-status">
@@ -82,7 +107,16 @@ export default function Layout() {
         </button>
       </header>
 
-      <nav className="nav">
+      {/* Backdrop scrim — only rendered when mobile drawer is open */}
+      {mobileNavOpen && (
+        <div
+          className="nav-backdrop"
+          onClick={() => setMobileNavOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      <nav className={`nav${mobileNavOpen ? ' nav-mobile-open' : ''}`}>
         <div className="nav-section">Operations</div>
         {NAV_OPERATIONS.map(item => (
           <NavLink
