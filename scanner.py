@@ -853,8 +853,143 @@ async def telegram_poller(client: httpx.AsyncClient) -> None:
         await asyncio.sleep(TG_POLL_INTERVAL)
 
 
+# ── S80 P4: two-click confirm cache ──────────────────────────────────────────
+# When the user taps BUY on an alert, we don't execute immediately. We arm
+# the alert_id with a 10s TTL. A second tap within the window confirms the
+# trade and routes it through AutoExecutor.evaluate() + execute_trade(force=True)
+# + record_position() — the same path used by the Research panel's manual buy.
+#
+# This closes a long-standing gap: prior to S80 P4, manual BUY clicks only
+# stamped decision='buy' in meme_alerts and told the user to "place your
+# order on the exchange". They never executed and never created a position
+# row, which meant SL/TP/time-stop/fast-poll/quote-sanity-guard never ran on
+# manual buys.
+_pending_confirms: dict[int, float] = {}  # alert_id -> armed_at unix ts
+_CONFIRM_TTL_SEC = 10.0
+
+
+def _build_confirm_keyboard(alert_id: int, position_usd: float) -> dict:
+    """Two-button keyboard shown after the first BUY tap."""
+    return {
+        "inline_keyboard": [[
+            {"text": f"✅ CONFIRM ${position_usd:.2f}", "callback_data": f"confirm_buy_{alert_id}"},
+            {"text": "❌ Cancel",                       "callback_data": f"cancel_buy_{alert_id}"},
+        ]]
+    }
+
+
+def _load_alert_for_buy(alert_id: int) -> dict | None:
+    """
+    Reconstitute the pair dict + score needed to re-run AutoExecutor.evaluate().
+    Returns None if the alert row no longer exists or is malformed.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH, timeout=5)
+        try:
+            cur = conn.execute(
+                """SELECT chain, token_addr, token_name, symbol,
+                          price_usd, liquidity, volume_24h, mcap, rug_score
+                   FROM meme_alerts WHERE id = ?""",
+                (alert_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            cols = [d[0] for d in cur.description]
+            return dict(zip(cols, row))
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.error("_load_alert_for_buy(%d) failed: %s", alert_id, exc)
+        return None
+
+
+async def _execute_manual_buy(
+    client: httpx.AsyncClient, alert_id: int, msg_id: int | None,
+) -> str:
+    """
+    Execute a confirmed manual BUY. Returns the reply text to show the user.
+    Routes through AutoExecutor.evaluate() so all safety gates apply (paused,
+    daily loss limit, daily trade cap, composite signal). On success, records
+    the position so SL/TP/time-stop/fast-poll/quote-sanity-guard activate.
+    """
+    alert = _load_alert_for_buy(alert_id)
+    if not alert:
+        return f"❌ Alert #{alert_id} not found in database."
+
+    try:
+        from auto_executor import AutoExecutor
+        from exchange_executor import execute_trade
+    except ImportError as exc:
+        log.error("manual_buy: bot module import failed: %s", exc)
+        return f"❌ Bot modules unavailable: {exc}"
+
+    pair = {
+        "chain":      alert["chain"],
+        "token_addr": alert["token_addr"],
+        "token_name": alert.get("token_name") or alert.get("symbol") or "UNKNOWN",
+        "symbol":     alert.get("symbol") or "UNKNOWN",
+        "price_usd":  float(alert.get("price_usd") or 0),
+    }
+
+    ae = AutoExecutor()
+    decision = ae.evaluate({
+        "score":      int(alert.get("rug_score") or 0),
+        "market_cap": float(alert.get("mcap") or 0),
+        "token":      pair["symbol"],
+        "chain":      pair["chain"],
+        "price":      pair["price_usd"],
+    })
+
+    if decision.blocked:
+        update_alert_decision(alert_id, "blocked")
+        return f"⛔ Buy blocked by risk manager: {decision.reason}"
+
+    if not decision.executed:
+        # Soft block — score below threshold etc. Honor it for safety.
+        update_alert_decision(alert_id, "skip")
+        return f"⚠️ Buy not executed: {decision.reason}"
+
+    ok = execute_trade(
+        chain=pair["chain"],
+        token_addr=pair["token_addr"],
+        symbol=pair["symbol"],
+        position_usd=decision.position_usd,
+        price_usd=pair["price_usd"],
+        force=True,
+    )
+
+    if not ok:
+        update_alert_decision(alert_id, "execute_failed")
+        return f"❌ {pair['symbol']}: trade did not confirm on-chain. Check journal for details."
+
+    # Build a minimal `result` shim for record_position. record_position only
+    # reads result.position_usd today, so a tiny namespace object is enough.
+    class _Result:
+        def __init__(self, position_usd: float):
+            self.position_usd = position_usd
+    pos_id = record_position(pair, _Result(decision.position_usd), alert_id)
+    update_alert_decision(alert_id, "buy")
+
+    if pos_id:
+        log.info("Manual BUY executed: alert=%d -> position #%d %s $%.2f",
+                 alert_id, pos_id, pair["symbol"], decision.position_usd)
+        return (
+            f"✅ Bought {pair['symbol']} at ${pair['price_usd']:.8f}\n"
+            f"Position #{pos_id} opened — ${decision.position_usd:.2f}\n"
+            f"SL/TP/time-stop/fast-poll all active."
+        )
+    else:
+        # Trade fired but record failed — operator must manually register.
+        log.error("Manual BUY: execute_trade ok but record_position FAILED for alert=%d", alert_id)
+        return (
+            f"⚠️ {pair['symbol']}: trade fired but position record FAILED.\n"
+            f"Check wallet balance and manually register if needed."
+        )
+
+
 async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
-    """Process a single inline keyboard callback (buy_N or skip_N)."""
+    """Process a single inline keyboard callback (buy_N, confirm_buy_N, cancel_buy_N, skip_N)."""
     if not cb:
         return
     # Security: only process callbacks from the authorised chat
@@ -866,34 +1001,98 @@ async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
     msg      = cb.get("message") or {}
     msg_id   = msg.get("message_id")
 
-    if data.startswith("buy_"):
+    new_keyboard: dict | None = None  # If set, the message gets the new keyboard
+
+    if data.startswith("confirm_buy_"):
+        # SECOND CLICK — execute if armed and within TTL.
+        alert_id = int(data.split("_", 2)[2])
+        armed_at = _pending_confirms.pop(alert_id, None)
+        now = time.time()
+        if armed_at is None:
+            reply = "⏱️ Confirmation expired or never armed. Tap BUY again to retry."
+        elif now - armed_at > _CONFIRM_TTL_SEC:
+            reply = f"⏱️ Confirmation expired ({int(now - armed_at)}s > {int(_CONFIRM_TTL_SEC)}s). Tap BUY again."
+        else:
+            reply = await _execute_manual_buy(client, alert_id, msg_id)
+
+    elif data.startswith("cancel_buy_"):
+        alert_id = int(data.split("_", 2)[2])
+        _pending_confirms.pop(alert_id, None)
+        update_alert_decision(alert_id, "skip")
+        reply = "❌ Buy cancelled."
+        log.info("Manual BUY cancelled for alert_id=%d", alert_id)
+
+    elif data.startswith("buy_"):
+        # FIRST CLICK — arm confirmation, swap to confirm keyboard.
         alert_id = int(data.split("_", 1)[1])
-        update_alert_decision(alert_id, "buy")
-        reply = "Trade marked as BUY. Place your order on the exchange."
-        log.info("Manual BUY decision recorded for alert_id=%d", alert_id)
+        # Drop any stale pending entries (lazy cleanup — keeps cache small)
+        now = time.time()
+        for stale_id, armed in list(_pending_confirms.items()):
+            if now - armed > _CONFIRM_TTL_SEC:
+                _pending_confirms.pop(stale_id, None)
+
+        # Look up position size from the original alert evaluation context.
+        # We re-evaluate on confirm anyway, but for the message we want a
+        # number to show. Pull it from a fresh AutoExecutor.evaluate.
+        alert = _load_alert_for_buy(alert_id)
+        if not alert:
+            reply = f"❌ Alert #{alert_id} not found."
+        else:
+            try:
+                from auto_executor import AutoExecutor
+                ae = AutoExecutor()
+                decision = ae.evaluate({
+                    "score":      int(alert.get("rug_score") or 0),
+                    "market_cap": float(alert.get("mcap") or 0),
+                    "token":      alert.get("symbol") or "UNKNOWN",
+                    "chain":      alert.get("chain") or "solana",
+                    "price":      float(alert.get("price_usd") or 0),
+                })
+                pos_usd = decision.position_usd or 0.0
+            except Exception as exc:
+                log.warning("manual_buy arm: AutoExecutor probe failed: %s", exc)
+                pos_usd = 0.0
+
+            _pending_confirms[alert_id] = now
+            reply = (
+                f"⚠️ CONFIRM BUY within {int(_CONFIRM_TTL_SEC)}s\n\n"
+                f"{alert.get('symbol', 'UNKNOWN')} @ ${float(alert.get('price_usd') or 0):.8f}\n"
+                f"Position size: ${pos_usd:.2f}\n\n"
+                f"Tap CONFIRM to execute, Cancel to abort."
+            )
+            new_keyboard = _build_confirm_keyboard(alert_id, pos_usd)
+            log.info("Manual BUY armed for alert_id=%d (TTL %ds)", alert_id, int(_CONFIRM_TTL_SEC))
+
     elif data.startswith("skip_"):
         alert_id = int(data.split("_", 1)[1])
         update_alert_decision(alert_id, "skip")
+        _pending_confirms.pop(alert_id, None)
         reply = "Alert skipped and logged."
         log.info("Manual SKIP decision recorded for alert_id=%d", alert_id)
+
     elif data.startswith("rebalance_"):
         await handle_rebalance_callback(client, data, cb_id)
         return
+
     else:
         return
 
     # Acknowledge the callback to dismiss the loading spinner on the button
     await tg_call(client, "answerCallbackQuery", callback_query_id=cb_id)
 
-    # Replace the original message text (removes the keyboard)
+    # Replace the original message text. If new_keyboard is set, attach it
+    # (used for the "armed, awaiting confirm" state). Otherwise the keyboard
+    # is removed by Telegram automatically when reply_markup is omitted.
     if msg_id and TELEGRAM_CHAT_ID:
-        await tg_call(
-            client, "editMessageText",
-            chat_id=TELEGRAM_CHAT_ID,
-            message_id=msg_id,
-            text=reply,
-            parse_mode="HTML",
-        )
+        edit_args = {
+            "chat_id": TELEGRAM_CHAT_ID,
+            "message_id": msg_id,
+            "text": reply,
+            "parse_mode": "HTML",
+        }
+        if new_keyboard is not None:
+            edit_args["reply_markup"] = new_keyboard
+        await tg_call(client, "editMessageText", **edit_args)
 
 
 
