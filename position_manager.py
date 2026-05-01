@@ -168,10 +168,21 @@ def _get_solana_balance_raw(mint: str) -> int:
         return 0
 
 
-def _sell_solana(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int) -> tuple[bool, float, str | None]:
+def _sell_solana(
+    token_addr: str,
+    sell_raw: int,
+    symbol: str,
+    slippage_bps: int,
+    min_acceptable_usdc: float | None = None,
+) -> tuple[bool, float, str | None]:
     """
     Execute a token→USDC sell via solana_executor.
-    Returns (success, usdc_received_ui).
+    Returns (success, usdc_received_ui, err_code).
+
+    S80 P3b: when min_acceptable_usdc is set, the Jupiter quote outAmount
+    is compared against this floor. If the quote returns less than the floor,
+    the function returns (False, 0.0, "QUOTE_BLOWN") without submitting the
+    transaction. Caller decides whether to escalate or accept on retry.
     """
     try:
         import solana_executor as se
@@ -191,6 +202,17 @@ def _sell_solana(token_addr: str, sell_raw: int, symbol: str, slippage_bps: int)
         if expected_usdc <= 0:
             log.warning("Zero expected out for %s — aborting sell", symbol)
             return False, 0.0, "ZERO_QUOTE"
+
+        # S80 P3b: quote sanity guard — refuse to submit if the quote is
+        # materially worse than what the observed price implies. Caller may
+        # retry at a higher slippage tier or accept on the second pass.
+        if min_acceptable_usdc is not None and expected_usdc < min_acceptable_usdc:
+            gap_pct = (1 - expected_usdc / min_acceptable_usdc) * 100
+            log.warning(
+                "QUOTE_BLOWN: %s expected=$%.4f floor=$%.4f gap=%.1f%% (slippage=%dbps) — refusing submit",
+                symbol, expected_usdc, min_acceptable_usdc, gap_pct, slippage_bps,
+            )
+            return False, 0.0, "QUOTE_BLOWN"
 
         tx_b64 = se.build_swap_tx(quote)
         sig = se.sign_and_send(tx_b64)
@@ -552,6 +574,7 @@ def _evaluate_position(row: dict) -> None:
         return
 
     pct_vs_entry = ((price - entry) / entry) * 100
+    _last_pct_cache[pid] = pct_vs_entry  # S80 P3a
     # S63 P0: source of truth for "TP25 already fired" is positions.realized_pnl_usd,
     # not the in-memory _partial_taken dict. Dict survives only within one bot
     # process; DB survives restarts. If realized_pnl_usd > 0 on an open position,
@@ -669,14 +692,29 @@ def _evaluate_position(row: dict) -> None:
     # Max cap at 3000bps — never escalate above 30% even if base > 3000.
     slippage_schedule = sorted({s for s in (slippage, 1500, 3000) if s >= slippage})
 
+    # S80 P3b: quote sanity guard. Compute expected USDC at the observed price.
+    # Allow up to SELL_QUOTE_MAX_GAP_PCT below observed before refusing.
+    # On the SECOND blown quote, the floor is dropped to None so the position
+    # still exits — better to take a bad price than hold while liquidity bleeds.
+    quote_max_gap_pct = _cfg_float("SELL_QUOTE_MAX_GAP_PCT", "25.0")
+    expected_usdc_at_observed = price * (qty_db * sell_fraction)
+    quote_floor = expected_usdc_at_observed * (1 - quote_max_gap_pct / 100)
+    quote_blown_count = 0
+
     success = False
     usdc_out = 0.0
     err_code: str | None = None
     for i, try_slip in enumerate(slippage_schedule):
         # S74 P3: per-attempt latency timer for instrumentation
         _attempt_t0 = time.time()
+        # S80 P3b: pass the floor on first 2 attempts; drop guard on the last
+        # attempt so the position can still exit.
+        floor_arg = quote_floor if quote_blown_count < 2 else None
         if chain == "solana":
-            success, usdc_out, err_code = _sell_solana(token_addr, sell_raw, symbol, try_slip)
+            success, usdc_out, err_code = _sell_solana(
+                token_addr, sell_raw, symbol, try_slip,
+                min_acceptable_usdc=floor_arg,
+            )
         else:  # base
             success, usdc_out, err_code = _sell_base(token_addr, sell_raw, symbol, try_slip)
         _attempt_latency_ms = int((time.time() - _attempt_t0) * 1000)
@@ -705,6 +743,28 @@ def _evaluate_position(row: dict) -> None:
                 log.info("Position #%d %s: %s succeeded on retry %d with slippage=%dbps",
                          pid, symbol, action, i, try_slip)
             break
+
+        # S80 P3b: QUOTE_BLOWN — re-poll observed price and try the next tier.
+        # The price may have recovered, in which case the next quote will be
+        # within the floor. If not, the floor is recomputed at the new observed
+        # price for the next iteration. Floor is dropped on attempt 3 so we
+        # always exit before falling to cooldown.
+        if err_code == "QUOTE_BLOWN":
+            quote_blown_count += 1
+            new_price = _fetch_price_usd(chain, token_addr)
+            if new_price and new_price > 0:
+                price = new_price
+                expected_usdc_at_observed = price * (qty_db * sell_fraction)
+                quote_floor = expected_usdc_at_observed * (1 - quote_max_gap_pct / 100)
+                pct_vs_entry = ((price - entry) / entry) * 100
+                log.info(
+                    "Position #%d %s: re-polled price=$%.9f (%+.1f%%) — retrying with new floor=$%.4f",
+                    pid, symbol, price, pct_vs_entry, quote_floor,
+                )
+            log.warning("Position #%d %s: %s quote blown — escalating to next tier",
+                        pid, symbol, action)
+            continue
+
         # Only retry on SLIPPAGE or TX_TOO_LARGE — other errors fall through to
         # cooldown. TX_TOO_LARGE means the current slippage tier produced a
         # multi-hop route that exceeds the ~1644-byte serialized tx limit.
@@ -781,26 +841,107 @@ def _load_open_positions() -> list[dict]:
         conn.close()
 
 
+# S80 P3a: per-position next-check timestamp cache for adaptive polling.
+# Keyed by position id -> unix ts when the next _evaluate_position call is due.
+_next_check_ts: dict[int, float] = {}
+
+# Per-position last-known pct_vs_entry. Avoids needing to re-fetch price
+# just to decide whether to fetch price again on this tick.
+_last_pct_cache: dict[int, float] = {}
+
+
+def _due_for_check(
+    pos_id: int,
+    opened_at_str: str,
+    now: float,
+    slow_interval: int,
+    fast_interval: int,
+    fast_age_max: int,
+    fast_drawdown_pct: float,
+) -> bool:
+    """
+    S80 P3a: Decide if a position is due for a check this tick.
+
+    Fast-poll path (fast_interval, default 15s): position age <
+    fast_age_max seconds AND last observed pct_vs_entry <= -fast_drawdown_pct.
+
+    Slow-poll path (slow_interval, default 60s): everything else.
+
+    First time we see a position id, _next_check_ts has no entry, so we
+    schedule it for now — guarantees at least one evaluation per session.
+    """
+    next_ts = _next_check_ts.get(pos_id)
+    if next_ts is not None and now < next_ts:
+        return False
+
+    try:
+        opened_dt = datetime.fromisoformat(opened_at_str.replace(" ", "T"))
+        if opened_dt.tzinfo is None:
+            opened_dt = opened_dt.replace(tzinfo=timezone.utc)
+        age_sec = (datetime.now(timezone.utc) - opened_dt).total_seconds()
+    except Exception:
+        age_sec = 0.0
+
+    last_pct = _last_pct_cache.get(pos_id, 0.0)
+    is_fresh = age_sec < fast_age_max
+    is_drawdown = last_pct <= -fast_drawdown_pct
+
+    interval = fast_interval if (is_fresh and is_drawdown) else slow_interval
+    _next_check_ts[pos_id] = now + interval
+    return True
+
+
 async def position_manager_loop() -> None:
-    """Main coroutine — runs for the life of the bot process."""
+    """Main coroutine — runs for the life of the bot process.
+
+    S80 P3a: ticks every FAST_POLL_TICK_SECONDS (default 15s) and decides
+    per-position whether enough time has elapsed since its last check.
+    Young positions in drawdown get fast-polled (FAST_POLL_INTERVAL_SECONDS,
+    default 15s); everything else stays on POSITION_CHECK_INTERVAL_SECONDS
+    (default 60s).
+    """
     if not _cfg_bool("POSITION_MANAGER_ENABLED", "true"):
         log.info("position_manager disabled via POSITION_MANAGER_ENABLED")
         return
 
-    interval = _cfg_int("POSITION_CHECK_INTERVAL_SECONDS", "60")
-    log.info("position_manager: starting (interval=%ds, chains=solana+base)", interval)
+    slow_interval     = _cfg_int("POSITION_CHECK_INTERVAL_SECONDS", "60")
+    fast_interval     = _cfg_int("FAST_POLL_INTERVAL_SECONDS",      "15")
+    fast_age_max      = _cfg_int("FAST_POLL_MAX_AGE_SECONDS",       "300")
+    fast_drawdown_pct = _cfg_float("FAST_POLL_DRAWDOWN_PCT",        "3.0")
+    tick              = _cfg_int("FAST_POLL_TICK_SECONDS",          "15")
+
+    log.info(
+        "position_manager: starting (tick=%ds, slow=%ds, fast=%ds when age<%ds and pct<=-%.1f%%)",
+        tick, slow_interval, fast_interval, fast_age_max, fast_drawdown_pct,
+    )
 
     while True:
         try:
+            now = time.time()
             positions = _load_open_positions()
             if positions:
-                log.debug("position_manager: %d open positions", len(positions))
+                live_ids = {p["id"] for p in positions}
+                for stale in list(_next_check_ts.keys()):
+                    if stale not in live_ids:
+                        _next_check_ts.pop(stale, None)
+                        _last_pct_cache.pop(stale, None)
+
+                checked = 0
                 for row in positions:
-                    _evaluate_position(row)
+                    if _due_for_check(
+                        row["id"], row["opened_at"], now,
+                        slow_interval, fast_interval,
+                        fast_age_max, fast_drawdown_pct,
+                    ):
+                        _evaluate_position(row)
+                        checked += 1
+                if checked:
+                    log.debug("position_manager: %d/%d positions evaluated this tick",
+                              checked, len(positions))
         except Exception as exc:
             log.error("position_manager loop error: %s", exc, exc_info=True)
 
-        await asyncio.sleep(interval)
+        await asyncio.sleep(tick)
 
 
 # ── Self-test (read-only, no execution) ───────────────────────────────────────
