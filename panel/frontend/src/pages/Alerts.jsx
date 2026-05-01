@@ -44,7 +44,11 @@ function AlertCard({ alert, onDecision }) {
         <ScoreBadge score={alert.security_score} />
         {expired && <span className="tag tag-gray" style={{ marginLeft: 'auto' }}>Expired</span>}
         {decided === 'buy' && <span className="tag tag-green" style={{ marginLeft: 'auto' }}>Bought</span>}
+        {decided === 'auto_buy' && <span className="tag tag-green" style={{ marginLeft: 'auto' }}>Auto-bought</span>}
         {decided === 'skip' && <span className="tag tag-gray" style={{ marginLeft: 'auto' }}>Skipped</span>}
+        {decided === 'buy_logged_no_exec' && <span className="tag tag-gray" style={{ marginLeft: 'auto' }} title="Logged before S80 P4 fix - never executed">Logged (no exec)</span>}
+        {decided === 'blocked' && <span className="tag tag-red" style={{ marginLeft: 'auto' }}>Blocked</span>}
+        {decided === 'execute_failed' && <span className="tag tag-red" style={{ marginLeft: 'auto' }}>Failed</span>}
         {!decided && !expired && (
           <span className="alert-time">{timeAgo(alert.timestamp)}</span>
         )}
