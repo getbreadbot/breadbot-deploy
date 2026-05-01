@@ -23,14 +23,58 @@ function fmt(n, prefix = '') {
 function AlertCard({ alert, onDecision }) {
   const [acting, setActing] = useState(false)
   const [decided, setDecided] = useState(alert.actioned ? alert.action : null)
+  // S80 P6: two-click BUY confirm. First click arms; second confirms within 10s.
+  const [confirmArmed, setConfirmArmed] = useState(false)
+  const [confirmTimer, setConfirmTimer] = useState(null)
   const expired = !decided && alert.expires_at && Date.now() / 1000 > alert.expires_at
+  const errorMsg = alert.errorMsg || null
+
+  // S80 P6: decision_ack is now authoritative — sync from parent state.
+  // Pre-fix this was set once at mount only, so a failed buy left the local
+  // state out of sync with the parent.
+  useEffect(() => {
+    setDecided(alert.actioned ? alert.action : null)
+  }, [alert.actioned, alert.action])
+
+  function armConfirm() {
+    if (decided || expired || acting) return
+    setConfirmArmed(true)
+    if (confirmTimer) clearTimeout(confirmTimer)
+    const t = setTimeout(() => {
+      setConfirmArmed(false)
+      setConfirmTimer(null)
+    }, 10000)
+    setConfirmTimer(t)
+  }
+
+  function cancelConfirm() {
+    setConfirmArmed(false)
+    if (confirmTimer) {
+      clearTimeout(confirmTimer)
+      setConfirmTimer(null)
+    }
+  }
 
   async function decide(action) {
     if (decided || expired || acting) return
+    if (action === 'buy') {
+      // S80 P6: first click arms, second click executes
+      if (!confirmArmed) {
+        armConfirm()
+        return
+      }
+      if (confirmTimer) clearTimeout(confirmTimer)
+      setConfirmTimer(null)
+      setConfirmArmed(false)
+    }
     setActing(true)
     try {
+      // Send decision via WS. Buy waits for decision_ack to set decided.
+      // Skip is local-only and updates immediately.
       onDecision(alert.id, action)
-      setDecided(action)
+      if (action === 'skip') {
+        setDecided('skip')
+      }
     } finally {
       setActing(false)
     }
@@ -137,7 +181,21 @@ function AlertCard({ alert, onDecision }) {
         </div>
       )}
 
-      {!decided && !expired && (
+      {errorMsg && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.1)',
+          border: '1px solid rgba(239, 68, 68, 0.3)',
+          color: '#fca5a5',
+          padding: '8px 12px',
+          borderRadius: 4,
+          marginTop: 8,
+          fontSize: 12,
+          whiteSpace: 'pre-wrap',
+        }}>
+          {errorMsg}
+        </div>
+      )}
+      {!decided && !expired && !confirmArmed && (
         <div className="alert-actions">
           <button
             className="btn btn-green"
@@ -170,6 +228,28 @@ function AlertCard({ alert, onDecision }) {
               View chart ↗
             </a>
           )}
+        </div>
+      )}
+      {!decided && !expired && confirmArmed && (
+        <div className="alert-actions" style={{ background: 'rgba(245, 158, 11, 0.08)', padding: 8, borderRadius: 4, border: '1px solid rgba(245, 158, 11, 0.3)' }}>
+          <div style={{ fontSize: 12, color: '#fbbf24', flexBasis: '100%', marginBottom: 4 }}>
+            ⚠️ Tap CONFIRM within 10s to execute
+          </div>
+          <button
+            className="btn btn-green"
+            onClick={() => decide('buy')}
+            disabled={acting}
+            style={{ fontWeight: 'bold' }}
+          >
+            ✅ CONFIRM ${alert.position_size_usd ? alert.position_size_usd.toFixed(0) : ''}
+          </button>
+          <button
+            className="btn btn-ghost"
+            onClick={() => cancelConfirm()}
+            disabled={acting}
+          >
+            Cancel
+          </button>
         </div>
       )}
     </div>
@@ -216,9 +296,21 @@ export default function Alerts() {
             })
           }
           if (msg.type === 'decision_ack') {
-            setAlerts(prev => prev.map(a =>
-              a.id === msg.alert_id ? { ...a, actioned: true, action: msg.action } : a
-            ))
+            // S80 P6: ack now carries success flag + user_message. We mark
+            // actioned=true ONLY if success=true (or skip — which always succeeds).
+            // Failures surface as an inline error message that the AlertCard
+            // can display.
+            const ok = msg.action === 'skip' || msg.success === true
+            setAlerts(prev => prev.map(a => {
+              if (a.id !== msg.alert_id) return a
+              if (ok) {
+                // Use decision_value if backend supplies it (e.g. 'buy_logged_no_exec')
+                const finalAction = msg.decision_value || msg.action
+                return { ...a, actioned: true, action: finalAction, errorMsg: null }
+              }
+              // Failure — clear any prior error and surface the new one
+              return { ...a, actioned: false, errorMsg: msg.user_message || 'Buy failed' }
+            }))
           }
         } catch {}
       }
@@ -228,12 +320,22 @@ export default function Alerts() {
   }, [])
 
   function sendDecision(alertId, action) {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'decision', alert_id: alertId, action }))
+    if (wsRef.current?.readyState !== WebSocket.OPEN) {
+      // S80 P6: WS not connected — surface error immediately rather than
+      // silently swallowing the click as the prior code did.
+      setAlerts(prev => prev.map(a =>
+        a.id === alertId ? { ...a, errorMsg: 'WebSocket disconnected — try again.' } : a
+      ))
+      return
     }
-    setAlerts(prev => prev.map(a =>
-      a.id === alertId ? { ...a, actioned: true, action } : a
-    ))
+    wsRef.current.send(JSON.stringify({ type: 'decision', alert_id: alertId, action }))
+    // S80 P6: NO optimistic update for buy. Wait for decision_ack to arrive
+    // with success/failure verdict. Skip stays optimistic (it's local-only).
+    if (action === 'skip') {
+      setAlerts(prev => prev.map(a =>
+        a.id === alertId ? { ...a, actioned: true, action: 'skip' } : a
+      ))
+    }
   }
 
   const filtered = filter === 'pending'

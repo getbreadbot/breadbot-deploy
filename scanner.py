@@ -891,115 +891,36 @@ def _build_confirm_keyboard(alert_id: int, position_usd: float) -> dict:
     }
 
 
+# S80 P6: shared canonical manual-buy logic now lives in manual_buy.py
+# This module re-exports thin async wrappers used by the Telegram callback path.
+# The shared helper is also called by panel.websocket_manager and panel.research_proxy.
+
 def _load_alert_for_buy(alert_id: int) -> dict | None:
-    """
-    Reconstitute the pair dict + score needed to re-run AutoExecutor.evaluate().
-    Returns None if the alert row no longer exists or is malformed.
-    """
-    try:
-        conn = sqlite3.connect(DB_PATH, timeout=5)
-        try:
-            cur = conn.execute(
-                """SELECT chain, token_addr, token_name, symbol,
-                          price_usd, liquidity, volume_24h, mcap, rug_score
-                   FROM meme_alerts WHERE id = ?""",
-                (alert_id,),
-            )
-            row = cur.fetchone()
-            if not row:
-                return None
-            cols = [d[0] for d in cur.description]
-            return dict(zip(cols, row))
-        finally:
-            conn.close()
-    except Exception as exc:
-        log.error("_load_alert_for_buy(%d) failed: %s", alert_id, exc)
-        return None
+    """Back-compat shim — delegates to manual_buy._load_alert_for_buy."""
+    from manual_buy import _load_alert_for_buy as _impl
+    return _impl(alert_id)
 
 
 async def _execute_manual_buy(
     client: httpx.AsyncClient, alert_id: int, msg_id: int | None,
 ) -> str:
     """
-    Execute a confirmed manual BUY. Returns the reply text to show the user.
-    Routes through AutoExecutor.evaluate() so all safety gates apply (paused,
-    daily loss limit, daily trade cap, composite signal). On success, records
-    the position so SL/TP/time-stop/fast-poll/quote-sanity-guard activate.
+    Execute a confirmed manual BUY. Returns the reply text for Telegram.
+
+    Wraps the shared synchronous manual_buy.execute_manual_buy in
+    asyncio.to_thread so the Telegram callback poller stays responsive
+    during the on-chain swap (which takes ~5-7 seconds).
     """
-    alert = _load_alert_for_buy(alert_id)
-    if not alert:
-        return f"❌ Alert #{alert_id} not found in database."
+    import asyncio
+    from manual_buy import execute_manual_buy
 
-    try:
-        from auto_executor import AutoExecutor
-        from exchange_executor import execute_trade
-    except ImportError as exc:
-        log.error("manual_buy: bot module import failed: %s", exc)
-        return f"❌ Bot modules unavailable: {exc}"
+    result = await asyncio.to_thread(execute_manual_buy, alert_id)
 
-    pair = {
-        "chain":      alert["chain"],
-        "token_addr": alert["token_addr"],
-        "token_name": alert.get("token_name") or alert.get("symbol") or "UNKNOWN",
-        "symbol":     alert.get("symbol") or "UNKNOWN",
-        "price_usd":  float(alert.get("price_usd") or 0),
-    }
-
-    ae = AutoExecutor()
-    decision = ae.evaluate({
-        "score":      int(alert.get("rug_score") or 0),
-        "market_cap": float(alert.get("mcap") or 0),
-        "token":      pair["symbol"],
-        "chain":      pair["chain"],
-        "price":      pair["price_usd"],
-    })
-
-    if decision.blocked:
-        update_alert_decision(alert_id, "blocked")
-        return f"⛔ Buy blocked by risk manager: {decision.reason}"
-
-    if not decision.executed:
-        # Soft block — score below threshold etc. Honor it for safety.
-        update_alert_decision(alert_id, "skip")
-        return f"⚠️ Buy not executed: {decision.reason}"
-
-    ok = execute_trade(
-        chain=pair["chain"],
-        token_addr=pair["token_addr"],
-        symbol=pair["symbol"],
-        position_usd=decision.position_usd,
-        price_usd=pair["price_usd"],
-        force=True,
-    )
-
-    if not ok:
-        update_alert_decision(alert_id, "execute_failed")
-        return f"❌ {pair['symbol']}: trade did not confirm on-chain. Check journal for details."
-
-    # Build a minimal `result` shim for record_position. record_position only
-    # reads result.position_usd today, so a tiny namespace object is enough.
-    class _Result:
-        def __init__(self, position_usd: float):
-            self.position_usd = position_usd
-    pos_id = record_position(pair, _Result(decision.position_usd), alert_id)
-    update_alert_decision(alert_id, "buy")
-
-    if pos_id:
-        log.info("Manual BUY executed: alert=%d -> position #%d %s $%.2f",
-                 alert_id, pos_id, pair["symbol"], decision.position_usd)
-        return (
-            f"✅ Bought {pair['symbol']} at ${pair['price_usd']:.8f}\n"
-            f"Position #{pos_id} opened — ${decision.position_usd:.2f}\n"
-            f"SL/TP/time-stop/fast-poll all active.\n\n"
-            f"📈 Chart: {_chart_url(pair['chain'], pair['token_addr'])}"
-        )
-    else:
-        # Trade fired but record failed — operator must manually register.
-        log.error("Manual BUY: execute_trade ok but record_position FAILED for alert=%d", alert_id)
-        return (
-            f"⚠️ {pair['symbol']}: trade fired but position record FAILED.\n"
-            f"Check wallet balance and manually register if needed."
-        )
+    # Append chart link if we have pair data (alert was found at minimum).
+    if result.pair:
+        chart = _chart_url(result.pair["chain"], result.pair["token_addr"])
+        return f"{result.user_message}\n\n📈 Chart: {chart}"
+    return result.user_message
 
 
 async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:

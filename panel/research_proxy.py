@@ -326,8 +326,50 @@ def research_buy(payload: BuyRequest, _: bool = Depends(verify_session)):
     )
     if not ok:
         raise HTTPException(status_code=500, detail="trade execution failed")
+
+    # S80 P6: record the position so SL/TP/time-stop/fast-poll/quote-sanity-guard
+    # all activate. Prior to this, /buy executed the trade but never wrote a
+    # row to positions, leaving the trade fully unmanaged.
+    try:
+        from scanner import record_position
+        class _Result:
+            def __init__(self, position_usd: float):
+                self.position_usd = position_usd
+        pair = {
+            "chain":      chain,
+            "token_addr": payload.address,
+            "token_name": payload.symbol or payload.address[:8],
+            "symbol":     payload.symbol or payload.address[:8],
+            "price_usd":  payload.price_usd,
+        }
+        # Research-page buys have no source alert_id. Pass 0 — record_position
+        # accepts it and does not enforce a foreign-key relationship.
+        pos_id = record_position(pair, _Result(decision.position_usd), 0)
+    except Exception as exc:
+        log.error("research_buy: record_position failed (trade DID fire): %s", exc, exc_info=True)
+        return {
+            "ok":           True,
+            "position_usd": decision.position_usd,
+            "strategy":     decision.strategy,
+            "reason":       decision.reason,
+            "warning":      f"Trade fired but record_position failed: {exc}. "
+                            f"Position is unmanaged — manual cleanup required.",
+        }
+
+    if pos_id is None:
+        log.error("research_buy: record_position returned None (trade DID fire)")
+        return {
+            "ok":           True,
+            "position_usd": decision.position_usd,
+            "strategy":     decision.strategy,
+            "reason":       decision.reason,
+            "warning":      "Trade fired but position record returned None. "
+                            "Position is unmanaged — manual cleanup required.",
+        }
+
     return {
-        "ok": True,
+        "ok":           True,
+        "position_id":  pos_id,
         "position_usd": decision.position_usd,
         "strategy":     decision.strategy,
         "reason":       decision.reason,

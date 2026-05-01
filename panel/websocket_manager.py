@@ -8,8 +8,11 @@ WebSocket Manager
 
 import asyncio
 import json
+import logging
 import time
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends
 from auth import verify_session
@@ -126,11 +129,55 @@ async def ws_alerts(websocket: WebSocket):
                     alert_id = msg.get("alert_id")
                     action = msg.get("action")  # "buy" | "skip"
                     if alert_id and action:
-                        manager.mark_actioned(alert_id)
-                        # Forward decision to bot via MCP
-                        from mcp_proxy import call_tool
-                        await call_tool("record_decision", {"alert_id": alert_id, "action": action})
-                        await websocket.send_json({"type": "decision_ack", "alert_id": alert_id, "action": action})
+                        if action == "buy":
+                            # S80 P6: real execution path. Routes through the
+                            # shared manual_buy.execute_manual_buy helper that
+                            # runs AutoExecutor.evaluate -> execute_trade(force=True)
+                            # -> record_position. Ships the structured result
+                            # back to the browser so the UI can show success
+                            # OR failure rather than optimistically marking
+                            # the alert as bought.
+                            import sys
+                            sys.path.insert(0, "/opt/projects/breadbot")
+                            from manual_buy import execute_manual_buy
+                            try:
+                                result = await asyncio.to_thread(execute_manual_buy, alert_id)
+                            except Exception as exc:
+                                logger.error("manual_buy WS handler exception: %s", exc, exc_info=True)
+                                await websocket.send_json({
+                                    "type": "decision_ack",
+                                    "alert_id": alert_id,
+                                    "action": "buy",
+                                    "success": False,
+                                    "reason": "exception",
+                                    "user_message": f"Buy handler crashed: {exc}",
+                                })
+                                continue
+
+                            if result.success:
+                                # Only NOW do we mark actioned — the trade is real.
+                                manager.mark_actioned(alert_id)
+                            await websocket.send_json({
+                                "type": "decision_ack",
+                                "alert_id": alert_id,
+                                "action": "buy",
+                                "success": result.success,
+                                "reason": result.reason,
+                                "user_message": result.user_message,
+                                "decision_value": result.decision_value,
+                                "position_id": result.position_id,
+                            })
+                        else:
+                            # Skip path stays decision-only — no execution required.
+                            manager.mark_actioned(alert_id)
+                            from mcp_proxy import call_tool
+                            await call_tool("record_decision", {"alert_id": alert_id, "action": "skip"})
+                            await websocket.send_json({
+                                "type": "decision_ack",
+                                "alert_id": alert_id,
+                                "action": "skip",
+                                "success": True,
+                            })
             except json.JSONDecodeError:
                 pass
     except WebSocketDisconnect:
