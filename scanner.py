@@ -296,6 +296,17 @@ def _fallback_position(score: int) -> float:
     return round(portfolio * max_pct * (0.5 + 0.5 * score / 100), 2)
 
 
+def _chart_url(chain: str, token_addr: str) -> str:
+    """Return a DEXScreener URL the user can tap to see live OHLCV.
+    DEXScreener accepts a bare token address and resolves the deepest pool.
+    """
+    if chain == "solana":
+        return f"https://dexscreener.com/solana/{token_addr}"
+    if chain == "base":
+        return f"https://dexscreener.com/base/{token_addr}"
+    return f"https://dexscreener.com/search?q={token_addr}"
+
+
 def build_auto_buy_message(pair: dict, score: int, flags: list[str], result) -> str:
     return (
         f"AUTO-EXECUTED [{result.strategy.upper()}]\n\n"
@@ -309,7 +320,8 @@ def build_auto_buy_message(pair: dict, score: int, flags: list[str], result) -> 
         f"Score:       {score}/100\n\n"
         f"Flags:\n{_flags_text(flags)}\n\n"
         f"Executed: ${result.position_usd:.2f}\n"
-        f"{result.reason}"
+        f"{result.reason}\n\n"
+        f"📈 Chart: {_chart_url(pair['chain'], pair['token_addr'])}"
     )
 
 
@@ -327,7 +339,8 @@ def build_approval_message(pair: dict, score: int, flags: list[str], result) -> 
         f"Market cap:  ${pair.get('mcap', 0):,.0f}\n"
         f"Score:       {score}/100\n\n"
         f"Flags:\n{_flags_text(flags)}\n\n"
-        f"{result.reason}"
+        f"{result.reason}\n\n"
+        f"📈 Chart: {_chart_url(pair['chain'], pair['token_addr'])}"
     )
     return text, position
 
@@ -977,7 +990,8 @@ async def _execute_manual_buy(
         return (
             f"✅ Bought {pair['symbol']} at ${pair['price_usd']:.8f}\n"
             f"Position #{pos_id} opened — ${decision.position_usd:.2f}\n"
-            f"SL/TP/time-stop/fast-poll all active."
+            f"SL/TP/time-stop/fast-poll all active.\n\n"
+            f"📈 Chart: {_chart_url(pair['chain'], pair['token_addr'])}"
         )
     else:
         # Trade fired but record failed — operator must manually register.
@@ -1058,7 +1072,8 @@ async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
                 f"⚠️ CONFIRM BUY within {int(_CONFIRM_TTL_SEC)}s\n\n"
                 f"{alert.get('symbol', 'UNKNOWN')} @ ${float(alert.get('price_usd') or 0):.8f}\n"
                 f"Position size: ${pos_usd:.2f}\n\n"
-                f"Tap CONFIRM to execute, Cancel to abort."
+                f"Tap CONFIRM to execute, Cancel to abort.\n\n"
+                f"📈 Chart: {_chart_url(alert.get('chain', 'solana'), alert['token_addr'])}"
             )
             new_keyboard = _build_confirm_keyboard(alert_id, pos_usd)
             log.info("Manual BUY armed for alert_id=%d (TTL %ds)", alert_id, int(_CONFIRM_TTL_SEC))
