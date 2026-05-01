@@ -84,7 +84,38 @@ function AlertCard({ alert, onDecision }) {
         <div>
           <div className="alert-stat-label">Contract</div>
           <div className="alert-stat-value" style={{ fontSize: 11 }}>
-            {alert.contract ? `${alert.contract.slice(0, 6)}…${alert.contract.slice(-4)}` : '—'}
+            {alert.contract ? (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  navigator.clipboard.writeText(alert.contract).then(() => {
+                    const el = e.currentTarget
+                    const orig = el.textContent
+                    el.textContent = 'Copied!'
+                    el.style.color = 'var(--green, #4ade80)'
+                    setTimeout(() => {
+                      el.textContent = orig
+                      el.style.color = ''
+                    }, 1200)
+                  }).catch(() => {})
+                }}
+                title={alert.contract + ' (tap to copy)'}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  padding: 0,
+                  font: 'inherit',
+                  fontSize: 11,
+                  color: 'inherit',
+                  cursor: 'pointer',
+                  textDecoration: 'underline dotted',
+                  textUnderlineOffset: '2px',
+                }}
+              >
+                {`${alert.contract.slice(0, 6)}…${alert.contract.slice(-4)}`}
+              </button>
+            ) : '—'}
           </div>
         </div>
         <div>
@@ -124,7 +155,13 @@ function AlertCard({ alert, onDecision }) {
           </button>
           {alert.contract && (
             <a
-              href={`https://dexscreener.com/search?q=${alert.contract}`}
+              href={
+                alert.chain === 'solana'
+                  ? `https://dexscreener.com/solana/${alert.contract}`
+                  : alert.chain === 'base'
+                  ? `https://dexscreener.com/base/${alert.contract}`
+                  : `https://dexscreener.com/search?q=${alert.contract}`
+              }
               target="_blank"
               rel="noopener"
               className="btn btn-ghost"
