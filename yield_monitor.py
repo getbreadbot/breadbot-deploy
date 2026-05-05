@@ -103,7 +103,15 @@ async def _tg_send(client: httpx.AsyncClient, text: str) -> None:
 
 async def _maybe_alert(client: httpx.AsyncClient, platform: str, asset: str,
                         new_apy: float, threshold: float = YIELD_CHANGE_ALERT_PCT) -> None:
-    """Fire a Telegram alert if the rate moved more than threshold % since last reading."""
+    """Fire a Telegram alert if the rate moved more than threshold % since last reading.
+
+    Gated by `notify_yield_changes` config key (default off). Snapshots are still
+    written to DB regardless — only the Telegram message is suppressed.
+    """
+    # S81 P1: gate on notify_yield_changes (default OFF — yield_monitor was the loudest channel)
+    from config import _bool_config
+    if not _bool_config("notify_yield_changes", "NOTIFY_YIELD_CHANGES", default=False):
+        return
     last = db_last_apy(platform, asset)
     if last is None:
         return  # first reading — no comparison possible
@@ -240,8 +248,12 @@ async def poll_liquid_staking_rates(client: httpx.AsyncClient) -> list[dict]:
     log.info("mSOL: %.2f%%", msol_apy)
     results.append({"platform": "Marinade", "asset": "mSOL", "apy": msol_apy})
 
-    # Sanctum INF — via DeFi Llama (extra.sanctum.so DNS unreachable from VPS)
-    inf_apy = 8.10
+    # Sanctum INF — INF is a basket of Solana LSTs (jitoSOL, mSOL, etc.)
+    # Primary: DefiLlama yields endpoint. If it returns 0 (stale data) or fails,
+    # fall back to average of jitoSOL + mSOL already fetched above — valid proxy
+    # since INF holds both as underlying assets.
+    # Note: extra.sanctum.so and api.sanctum.so are unreachable from this VPS.
+    inf_apy = 0.0
     SANCTUM_INF_POOL = "3075a746-bdd1-4aac-bcd5-b035abee2622"
     try:
         resp = await client.get(
@@ -250,9 +262,18 @@ async def poll_liquid_staking_rates(client: httpx.AsyncClient) -> list[dict]:
         if resp.status_code == 200:
             data = resp.json().get("data", [])
             if data:
-                inf_apy = float(data[-1].get("apy", inf_apy))
+                inf_apy = float(data[-1].get("apy", 0.0))
     except Exception as exc:
-        log.warning("Sanctum INF poll failed: %s — using %.2f%% fallback", exc, inf_apy)
+        log.warning("Sanctum INF DefiLlama poll failed: %s", exc)
+    # Fallback: if DefiLlama returned 0 (stale) or failed, use LST basket average
+    if inf_apy == 0.0:
+        lst_rates = [r["apy"] for r in results if r["apy"] > 0]
+        if lst_rates:
+            inf_apy = round(sum(lst_rates) / len(lst_rates), 4)
+            log.info("Sanctum INF: DefiLlama stale — using LST basket average %.2f%%", inf_apy)
+        else:
+            inf_apy = 7.10  # hard fallback — known good rate
+            log.warning("Sanctum INF: no LST data available — using hardcoded fallback %.2f%%", inf_apy)
     await _maybe_alert(client, "Sanctum", "INF", inf_apy, LST_THRESHOLD)
     db_write_snapshot("Sanctum", "INF", inf_apy, notes="LST staking yield")
     log.info("Sanctum INF: %.2f%%", inf_apy)

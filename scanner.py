@@ -789,6 +789,20 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     }
     result = executor.evaluate(alert_dict)
 
+    # S81 P2: manual-mode override — when execution_mode='manual', any
+    # alert that would have auto-fired gets demoted to a pending approval.
+    # The user reviews every trade through the two-click confirm flow shipped
+    # in S80 P4 (Telegram) / P6 (panel), giving full soak coverage of the
+    # manual buy code paths and validating S80 P3/P5/P7 defenses on every fire.
+    from config import _str_config
+    _exec_mode = _str_config("execution_mode", "EXECUTION_MODE", default="auto").lower()
+    if _exec_mode == "manual" and result.executed:
+        # Synthesize a manual-equivalent EvaluatorResult: keep position size,
+        # clear executed flag, mark blocked=False so dispatch falls into approval path
+        result.executed = False
+        if not result.reason or "auto" in result.reason.lower():
+            result.reason = f"Manual mode — review and confirm. (would have auto-fired: {result.reason})"
+
     # 3. Determine decision label for DB
     if result.blocked:
         decision = "pending"   # keep for manual review when bot resumes
