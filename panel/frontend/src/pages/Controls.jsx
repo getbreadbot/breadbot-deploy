@@ -37,9 +37,17 @@ export default function Controls() {
 
   async function load() {
     try {
-      const [s, set] = await Promise.all([get('/bot/status'), get('/settings/basic')])
+      // S81 P4: read execution_mode from /api/config (canonical bot_config)
+      // not /api/settings/basic (legacy Railway env, no-op on VPS).
+      // ALERT_CHANNEL still pulled from /settings/basic since that field
+      // is decorative — nothing in the bot reads it yet.
+      const [s, set, cfg] = await Promise.all([
+        get('/bot/status'),
+        get('/settings/basic'),
+        get('/config'),
+      ])
       setStatus(s)
-      setSettings(set)
+      setSettings({ ...set, ...(cfg?.values ?? {}) })
     } catch {}
     setLoading(false)
   }
@@ -58,15 +66,26 @@ export default function Controls() {
   }
 
   async function saveAutoExecute(val) {
-    const newSettings = { ...settings, AUTO_EXECUTE: val ? 'auto' : 'manual' }
+    // S81 P4: write to bot_config.execution_mode via /api/config.
+    // Pre-S81 P4 this wrote AUTO_EXECUTE to Railway env (no-op on VPS) and
+    // panel-process os.environ (scanner has its own process — never saw the
+    // change). Same silent-failure bug class as S80 P7. Now writes to the
+    // canonical key the scanner actually reads on every alert evaluation.
+    const mode = val ? 'auto' : 'manual'
+    const newSettings = { ...settings, execution_mode: mode }
     setSettings(newSettings)
     setSaving(true)
     try {
-      await post('/settings/basic', { settings: { AUTO_EXECUTE: val ? 'auto' : 'manual' } })
+      const result = await post('/config', { settings: { execution_mode: mode } })
+      if (result?.errors && Object.keys(result.errors).length > 0) {
+        throw new Error(result.errors.execution_mode || 'Save failed')
+      }
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (err) {
       alert(err.message)
+      // Roll back optimistic state
+      setSettings(prev => ({ ...prev, execution_mode: val ? 'manual' : 'auto' }))
     } finally {
       setSaving(false)
     }
@@ -85,7 +104,7 @@ export default function Controls() {
   if (loading) return <div className="loading"><div className="spinner" />Loading controls...</div>
 
   const trading = status?.trading_active ?? false
-  const autoExecute = settings?.AUTO_EXECUTE === 'auto'
+  const autoExecute = settings?.execution_mode === 'auto'
   const alertChannel = settings?.ALERT_CHANNEL || 'both'
 
   return (
