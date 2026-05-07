@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from auth import router as auth_router, verify_session
 from mcp_proxy import router as mcp_router
 from railway_api import router as railway_router
+from bot_config_api import router as bot_config_router
 from research_proxy import router as research_router
 from strategy_proxy import router as strategy_router
 from tax_export import router as tax_router
@@ -50,6 +51,7 @@ app.add_middleware(
 app.include_router(auth_router,     prefix="/api/auth",     tags=["auth"])
 app.include_router(mcp_router,      prefix="/api/bot",      tags=["bot"])
 app.include_router(railway_router,  prefix="/api/settings", tags=["settings"])
+app.include_router(bot_config_router, prefix="/api/config",   tags=["config"])
 app.include_router(research_router, prefix="/api/research", tags=["research"])
 app.include_router(strategy_router, prefix="/api/bot",      tags=["strategy"])
 app.include_router(tax_router,      prefix="/api/tax",      tags=["tax"])

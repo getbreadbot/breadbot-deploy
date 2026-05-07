@@ -1,73 +1,20 @@
 import { useState, useEffect } from 'react'
 import { get, post } from '../lib/api.js'
 
-const BASIC_FIELDS = [
-  {
-    key: 'MAX_POSITION_SIZE_PCT',
-    label: 'Max position size',
-    desc: 'Maximum % of your portfolio placed on any single trade. Default: 0.02 (2%).',
-    placeholder: '0.02',
-    suffix: '(e.g. 0.02 = 2%)',
-  },
-  {
-    key: 'DAILY_LOSS_LIMIT_PCT',
-    label: 'Daily loss limit',
-    desc: 'Bot auto-pauses if losses hit this % of portfolio in one day. Default: 0.05 (5%).',
-    placeholder: '0.05',
-    suffix: '(e.g. 0.05 = 5%)',
-  },
-  {
-    key: 'MIN_LIQUIDITY_USD',
-    label: 'Minimum liquidity',
-    desc: 'Tokens below this USD liquidity are filtered out. Default: 15000.',
-    placeholder: '15000',
-    suffix: 'USD',
-  },
-  {
-    key: 'MIN_VOLUME_24H_USD',
-    label: 'Minimum 24h volume',
-    desc: 'Tokens below this 24-hour trading volume are filtered out. Default: 40000.',
-    placeholder: '40000',
-    suffix: 'USD',
-  },
-  {
-    key: 'AUTO_EXECUTE_MIN_SCORE',
-    label: 'Auto-execute minimum score',
-    desc: 'Only auto-trade alerts above this security score. Default: 75.',
-    placeholder: '75',
-    suffix: 'out of 100',
-  },
-]
+// S81 P3: Basic fields are now driven by /api/config which returns the schema.
+// The frontend renders types (float / int / bool / enum / string) from the
+// server response — no hard-coded list here. The Advanced (credentials)
+// section still uses the legacy /api/settings/advanced endpoint because
+// API keys belong in deployment env, not bot_config.
 
 const ADVANCED_GROUPS = [
-  {
-    label: 'Coinbase',
-    keys: ['COINBASE_API_KEY', 'COINBASE_SECRET_KEY'],
-  },
-  {
-    label: 'Kraken',
-    keys: ['KRAKEN_API_KEY', 'KRAKEN_SECRET_KEY'],
-  },
-  {
-    label: 'Bybit',
-    keys: ['BYBIT_API_KEY', 'BYBIT_SECRET_KEY'],
-  },
-  {
-    label: 'Binance.US',
-    keys: ['BINANCE_API_KEY', 'BINANCE_SECRET_KEY'],
-  },
-  {
-    label: 'Gemini',
-    keys: ['GEMINI_API_KEY', 'GEMINI_SECRET_KEY'],
-  },
-  {
-    label: 'Telegram',
-    keys: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'],
-  },
-  {
-    label: 'RPC endpoints',
-    keys: ['SOLANA_RPC_URL', 'EVM_BASE_RPC_URL'],
-  },
+  { label: 'Coinbase',          keys: ['COINBASE_API_KEY', 'COINBASE_SECRET_KEY'] },
+  { label: 'Kraken',            keys: ['KRAKEN_API_KEY', 'KRAKEN_SECRET_KEY'] },
+  { label: 'Bybit',             keys: ['BYBIT_API_KEY', 'BYBIT_SECRET_KEY'] },
+  { label: 'Binance.US',        keys: ['BINANCE_API_KEY', 'BINANCE_SECRET_KEY'] },
+  { label: 'Gemini',            keys: ['GEMINI_API_KEY', 'GEMINI_SECRET_KEY'] },
+  { label: 'Telegram',          keys: ['TELEGRAM_BOT_TOKEN', 'TELEGRAM_CHAT_ID'] },
+  { label: 'RPC endpoints',     keys: ['SOLANA_RPC_URL', 'EVM_BASE_RPC_URL'] },
   {
     label: 'Coinbase CFM perpetuals',
     keys: ['COINBASE_PERP_ENABLED'],
@@ -79,6 +26,56 @@ const ADVANCED_GROUPS = [
     note: 'Decentralised perpetuals on Solana. No KYC. Uses existing Solana wallet. User assumes regulatory responsibility.',
   },
 ]
+
+
+// ── Field renderer — picks the right input by type ──────────────────────────
+
+function FieldInput({ field, value, onChange }) {
+  const t = field.type
+
+  if (t === 'bool') {
+    return (
+      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 10, cursor: 'pointer' }}>
+        <input
+          type="checkbox"
+          checked={!!value}
+          onChange={e => onChange(e.target.checked)}
+          style={{ width: 18, height: 18, cursor: 'pointer' }}
+        />
+        <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
+          {value ? 'On' : 'Off'}
+        </span>
+      </label>
+    )
+  }
+
+  if (t === 'enum') {
+    return (
+      <select
+        className="input"
+        value={value ?? field.default}
+        onChange={e => onChange(e.target.value)}
+        style={{ minWidth: 180 }}
+      >
+        {field.options.map(opt => (
+          <option key={opt} value={opt}>{opt}</option>
+        ))}
+      </select>
+    )
+  }
+
+  // float / int / string — all render as text input
+  return (
+    <input
+      type="text"
+      className="input mono"
+      value={value ?? ''}
+      onChange={e => onChange(e.target.value)}
+      placeholder={String(field.default)}
+    />
+  )
+}
+
 
 function AdvancedField({ fieldKey, setKey }) {
   const [revealed, setRevealed] = useState(false)
@@ -149,40 +146,64 @@ function AdvancedField({ fieldKey, setKey }) {
   )
 }
 
+
+// ── Main component ──────────────────────────────────────────────────────────
+
 export default function Settings() {
-  const [basic, setBasic] = useState({})
+  const [fields, setFields] = useState([])         // schema array from backend
+  const [values, setValues] = useState({})         // current values keyed by field.key
   const [advancedMeta, setAdvancedMeta] = useState({ set: {} })
   const [loading, setLoading] = useState(true)
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [dirty, setDirty] = useState(false)
+  const [errors, setErrors] = useState({})
 
   useEffect(() => {
     async function load() {
       try {
-        const [b, a] = await Promise.all([get('/settings/basic'), get('/settings/advanced')])
-        setBasic(b)
-        setAdvancedMeta(a)
-      } catch {}
+        const [cfg, adv] = await Promise.all([
+          get('/config'),
+          get('/settings/advanced'),
+        ])
+        setFields(cfg.fields || [])
+        setValues(cfg.values || {})
+        setAdvancedMeta(adv)
+      } catch (err) {
+        console.error('Settings load failed:', err)
+      }
       setLoading(false)
     }
     load()
   }, [])
 
   function update(key, val) {
-    setBasic(prev => ({ ...prev, [key]: val }))
+    setValues(prev => ({ ...prev, [key]: val }))
     setDirty(true)
+    setErrors(prev => {
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
   }
 
   async function saveBasic(e) {
     e.preventDefault()
     setSaving(true)
+    setErrors({})
     try {
-      await post('/settings/basic', { settings: basic })
-      setSaved(true)
-      setDirty(false)
-      setTimeout(() => setSaved(false), 2500)
+      const result = await post('/config', { settings: values })
+      if (result.errors && Object.keys(result.errors).length > 0) {
+        setErrors(result.errors)
+      } else {
+        setSaved(true)
+        setDirty(false)
+        setTimeout(() => setSaved(false), 2500)
+        // Reload to get canonical values back (in case of coercion)
+        const cfg = await get('/config')
+        setValues(cfg.values || {})
+      }
     } catch (err) {
       alert(err.message)
     } finally {
@@ -192,36 +213,57 @@ export default function Settings() {
 
   if (loading) return <div className="loading"><div className="spinner" />Loading settings...</div>
 
+  // Group fields by their `group` attribute, preserving order of first appearance
+  const groupOrder = []
+  const grouped = {}
+  for (const f of fields) {
+    const g = f.group || 'Other'
+    if (!(g in grouped)) {
+      grouped[g] = []
+      groupOrder.push(g)
+    }
+    grouped[g].push(f)
+  }
+
   return (
     <div>
       <div className="page-title">Settings</div>
-      <div className="page-sub">Bot configuration. Changes take effect on the next scanner cycle.</div>
+      <div className="page-sub">Bot configuration. Changes take effect immediately — no restart needed.</div>
 
-      {/* Basic */}
       <form onSubmit={saveBasic}>
-        <div className="card" style={{ marginBottom: 16 }}>
-          <div className="card-title">Risk & filter settings</div>
-          {BASIC_FIELDS.map(f => (
-            <div key={f.key} className="field">
-              <label className="field-label">{f.label}</label>
-              <div className="input-row">
-                <input
-                  type="text"
-                  className="input mono"
-                  value={basic[f.key] ?? ''}
-                  onChange={e => update(f.key, e.target.value)}
-                  placeholder={f.placeholder}
-                />
-                {f.suffix && (
-                  <span style={{ fontSize: 12, color: 'var(--text-3)', whiteSpace: 'nowrap', lineHeight: '36px' }}>
-                    {f.suffix}
-                  </span>
+        {groupOrder.map(groupName => (
+          <div key={groupName} className="card" style={{ marginBottom: 16 }}>
+            <div className="card-title">{groupName}</div>
+            {grouped[groupName].map(f => (
+              <div key={f.key} className="field">
+                <label className="field-label">{f.label}</label>
+                <div className="input-row">
+                  <FieldInput
+                    field={f}
+                    value={values[f.key]}
+                    onChange={val => update(f.key, val)}
+                  />
+                  {f.suffix && f.type !== 'bool' && f.type !== 'enum' && (
+                    <span style={{
+                      fontSize: 12,
+                      color: 'var(--text-3)',
+                      whiteSpace: 'nowrap',
+                      lineHeight: '36px',
+                    }}>
+                      {f.suffix}
+                    </span>
+                  )}
+                </div>
+                <div className="field-desc">{f.desc}</div>
+                {errors[f.key] && (
+                  <div style={{ fontSize: 12, color: 'var(--red, #ef4444)', marginTop: 4 }}>
+                    {errors[f.key]}
+                  </div>
                 )}
               </div>
-              <div className="field-desc">{f.desc}</div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ))}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginBottom: 24 }}>
           {saved && <span style={{ fontSize: 13, color: 'var(--green)', lineHeight: '36px' }}>Settings saved</span>}
@@ -231,7 +273,7 @@ export default function Settings() {
         </div>
       </form>
 
-      {/* Advanced */}
+      {/* Advanced — API keys (still routed through Railway env via legacy endpoint) */}
       <div className="card">
         <div
           style={{ display: 'flex', alignItems: 'center', cursor: 'pointer', userSelect: 'none' }}
@@ -258,6 +300,7 @@ export default function Settings() {
             }}>
               Only edit these if you know what you are doing. Incorrect values will stop the bot.
               Values are masked by default — click Reveal to view, Edit to change.
+              These keys live in deployment env and require a service restart to take effect.
             </div>
 
             {ADVANCED_GROUPS.map(group => (
