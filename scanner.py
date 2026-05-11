@@ -237,11 +237,26 @@ def db_clear_force_scan() -> None:
 # ── Telegram helpers ──────────────────────────────────────────────────────────
 
 async def tg_call(client: httpx.AsyncClient, method: str, **payload) -> dict:
-    """Call the Telegram Bot API and return the JSON response."""
+    """Call the Telegram Bot API and return the JSON response.
+
+    S81 P5: Log API-level rejections (HTTP 200 with ok=False) which were
+    previously swallowed. Bug C surfaced via PAIN/TROLL/MRTRENCH/OBC/BPEG/GDUPI
+    alerts: parse_mode=HTML rejected by Telegram because flag text contained
+    a raw '<' character ("Token < 1h old"), parser tried to open an HTML tag.
+    Every approval-path alert with that flag died silently with zero log output.
+    """
     url = TELEGRAM_BASE.format(token=TELEGRAM_BOT_TOKEN, method=method)
     try:
         r = await client.post(url, json=payload, timeout=10)
-        return r.json()
+        data = r.json()
+        if isinstance(data, dict) and not data.get("ok", True):
+            log.warning(
+                "Telegram %s rejected: code=%s desc=%s",
+                method,
+                data.get("error_code"),
+                str(data.get("description", ""))[:200],
+            )
+        return data
     except Exception as exc:
         log.error("Telegram API error (%s): %s", method, exc)
         return {}
@@ -250,6 +265,10 @@ async def tg_call(client: httpx.AsyncClient, method: str, **payload) -> dict:
 async def send_message(
     client: httpx.AsyncClient, text: str, reply_markup: dict | None = None
 ) -> dict:
+    """Send a Telegram message with HTML parse mode, falling back to plain
+    text if Telegram rejects the parse. S81 P5: prevents silent loss of alerts
+    when flag content contains raw '<' or other HTML-reserved characters.
+    """
     kwargs: dict = {
         "chat_id":    TELEGRAM_CHAT_ID,
         "text":       text,
@@ -257,7 +276,14 @@ async def send_message(
     }
     if reply_markup:
         kwargs["reply_markup"] = reply_markup
-    return await tg_call(client, "sendMessage", **kwargs)
+    resp = await tg_call(client, "sendMessage", **kwargs)
+    if isinstance(resp, dict) and not resp.get("ok", True):
+        desc = str(resp.get("description", "")).lower()
+        if "can't parse entities" in desc or "can\u2019t parse entities" in desc:
+            log.warning("send_message: HTML parse failed, retrying plain text")
+            kwargs.pop("parse_mode", None)
+            resp = await tg_call(client, "sendMessage", **kwargs)
+    return resp
 
 
 # ── Alert message formatters ──────────────────────────────────────────────────
@@ -286,7 +312,13 @@ def _format_token_label(symbol, token_name) -> str:
 
 
 def _flags_text(flags: list[str]) -> str:
-    return "\n".join(f"  {f}" for f in flags) if flags else "  None"
+    """Format flag list for Telegram. S81 P5: HTML-escape each flag so raw
+    '<' / '>' / '&' characters do not corrupt the parse_mode=HTML send.
+    Example: 'Token < 1h old' must become 'Token &lt; 1h old'."""
+    if not flags:
+        return "  None"
+    import html
+    return "\n".join(f"  {html.escape(str(f), quote=False)}" for f in flags)
 
 
 def _fallback_position(score: int) -> float:
