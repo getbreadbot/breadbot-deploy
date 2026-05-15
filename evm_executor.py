@@ -223,7 +223,25 @@ def get_quote(chain: Chain, token_in: str, token_out: str,
 
     resp = requests.post(ODOS_QUOTE_URL, json=body, timeout=_REQUEST_TIMEOUT,
                          headers={"Content-Type": "application/json"})
-    resp.raise_for_status()
+
+    # Odos returns 400 when no route exists (illiquid pair, unknown token).
+    # Catch it here and return a clean no-route result instead of raising.
+    if resp.status_code != 200:
+        try:
+            err_body = resp.json()
+            err_msg = err_body.get("detail", err_body.get("message", str(err_body)))
+        except Exception:
+            err_msg = resp.text[:200]
+        logger.warning(
+            "Odos quote HTTP %d for %s→%s on %s: %s",
+            resp.status_code, token_in[:10], token_out[:10], chain, err_msg,
+        )
+        return {
+            "amount_in": amount_in, "amount_out": 0,
+            "price_impact": None, "path_id": None, "chain": chain,
+            "error": f"Odos HTTP {resp.status_code}: {err_msg}",
+        }
+
     data = resp.json()
 
     if "pathId" not in data:
@@ -400,8 +418,9 @@ def execute_swap(chain: Chain, token_in: str, token_out: str,
         # 3. Get quote
         quote = get_quote(chain, token_in, token_out, amount_in)
         if not quote.get("path_id") or not quote.get("amount_out"):
+            odos_err = quote.get("error", "no route available")
             return {"success": False, "tx_hash": None, "amount_out": 0,
-                    "error": f"No Odos route: {token_in[:10]}→{token_out[:10]}"}
+                    "error": f"No Odos route: {token_in[:10]}→{token_out[:10]} ({odos_err})"}
 
         amount_out = quote["amount_out"]
         path_id = quote["path_id"]
