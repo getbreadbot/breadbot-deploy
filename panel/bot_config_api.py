@@ -150,6 +150,15 @@ BASIC_FIELDS: list[dict[str, Any]] = [
         "group": "Notifications",
         "desc": "Telegram alert when stablecoin or LST yields move more than 0.5 percent.",
     },
+    {
+        "key": "alert_channel",
+        "label": "Alert delivery channel",
+        "type": "enum",
+        "options": ["both", "telegram", "panel"],
+        "default": "both",
+        "group": "Notifications",
+        "desc": "Where trade alerts are delivered: Telegram only, panel only, or both.",
+    },
 ]
 
 

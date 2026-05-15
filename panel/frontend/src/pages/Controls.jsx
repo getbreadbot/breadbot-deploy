@@ -37,17 +37,14 @@ export default function Controls() {
 
   async function load() {
     try {
-      // S81 P4: read execution_mode from /api/config (canonical bot_config)
-      // not /api/settings/basic (legacy Railway env, no-op on VPS).
-      // ALERT_CHANNEL still pulled from /settings/basic since that field
-      // is decorative — nothing in the bot reads it yet.
-      const [s, set, cfg] = await Promise.all([
+      // S82 P2: all settings read from /api/config (canonical bot_config).
+      // /settings/basic is legacy and no longer needed here.
+      const [s, cfg] = await Promise.all([
         get('/bot/status'),
-        get('/settings/basic'),
         get('/config'),
       ])
       setStatus(s)
-      setSettings({ ...set, ...(cfg?.values ?? {}) })
+      setSettings(cfg?.values ?? {})
     } catch {}
     setLoading(false)
   }
@@ -92,12 +89,21 @@ export default function Controls() {
   }
 
   async function saveAlertChannel(val) {
-    const newSettings = { ...settings, ALERT_CHANNEL: val }
+    const newSettings = { ...settings, alert_channel: val }
     setSettings(newSettings)
+    setSaving(true)
     try {
-      await post('/settings/basic', { settings: { ALERT_CHANNEL: val } })
+      const result = await post('/config', { settings: { alert_channel: val } })
+      if (result?.errors && Object.keys(result.errors).length > 0) {
+        throw new Error(result.errors.alert_channel || 'Save failed')
+      }
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
     } catch (err) {
       alert(err.message)
+      setSettings(prev => ({ ...prev, alert_channel: alertChannel }))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -105,7 +111,7 @@ export default function Controls() {
 
   const trading = status?.trading_active ?? false
   const autoExecute = settings?.execution_mode === 'auto'
-  const alertChannel = settings?.ALERT_CHANNEL || 'both'
+  const alertChannel = settings?.alert_channel || 'both'
 
   return (
     <div>

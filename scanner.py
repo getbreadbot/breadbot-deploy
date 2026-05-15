@@ -850,15 +850,24 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
 
     log.info("  Logged alert_id=%d decision=%s score=%d", alert_id, decision, score)
 
-    # 5. Telegram dispatch
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        log.warning("  Telegram not configured — DB only")
-        return
+    # 5. Dispatch — gated by alert_channel setting
+    #    alert_channel controls WHERE the alert goes, not WHETHER the bot acts.
+    #    "panel" = skip Telegram send, but still auto-execute and broadcast.
+    #    "telegram" = normal Telegram path (panel still sees DB via polling).
+    #    "both" = Telegram + panel both fire.
+    _alert_ch = _str_config("alert_channel", "ALERT_CHANNEL", default="both").lower()
+    _tg_available = bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+    _send_tg = _tg_available and _alert_ch in ("telegram", "both")
+
+    if not _tg_available:
+        log.warning("  Telegram not configured — DB + panel only")
+    elif not _send_tg:
+        log.info("  alert_channel=%s — Telegram dispatch suppressed", _alert_ch)
 
     if result.blocked:
         # Only surface to Telegram if the bot is explicitly paused; daily-cap
         # blocks are informational and would create noise.
-        if "paused" in result.reason.lower():
+        if _send_tg and "paused" in result.reason.lower():
             await send_message(
                 client,
                 f"Alert received while paused: {symbol} ({chain.upper()})\n"
@@ -872,10 +881,12 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
         asyncio.create_task(
             maybe_pullback(client, pair, result, alert_id, score, flags)
         )
-    else:
+    elif _send_tg:
         text, position = build_approval_message(pair, score, flags, result)
         keyboard       = build_buy_keyboard(alert_id, position)
         await send_message(client, text, reply_markup=keyboard)
+    else:
+        log.info("  Alert %d queued for panel (no Telegram)", alert_id)
 
     # Alpha broadcast — fire-and-forget to all registered buyers
     # Runs only when an alert is not blocked (blocked paths return early above).
