@@ -648,6 +648,19 @@ def _evaluate_position(row: dict) -> None:
                        age_sec=age_sec, action_decided=decided)
         return
 
+    # S82 P4: Grace period — skip wallet balance check for very new positions.
+    # RPC can take 5-15s to index a new token account after a swap lands.
+    # Without this guard, the dust-close path fires on stale zero-balance reads.
+    BALANCE_GRACE_SEC = 45
+    if age_sec < BALANCE_GRACE_SEC:
+        log.info(
+            "Position #%d %s: age %ds < %ds grace — skipping balance check, holding",
+            pid, symbol, int(age_sec), BALANCE_GRACE_SEC,
+        )
+        _log_exit_poll(pid, observed_price=price, pct_vs_entry=pct_vs_entry,
+                       age_sec=age_sec, action_decided="grace_hold")
+        return
+
     # Lookup authoritative on-chain balance (qty_db can diverge — memecoins with tax, etc.)
     if chain == "solana":
         wallet_raw = _get_solana_balance_raw(token_addr)
