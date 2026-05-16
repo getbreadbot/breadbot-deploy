@@ -159,6 +159,30 @@ BASIC_FIELDS: list[dict[str, Any]] = [
         "group": "Notifications",
         "desc": "Where trade alerts are delivered: Telegram only, panel only, or both.",
     },
+    {
+        "key": "trailing_stop_enabled",
+        "label": "Trailing stop",
+        "type": "bool",
+        "default": True,
+        "group": "Safety",
+        "desc": "Once a position gains past the activation threshold, the stop-loss follows price upward to lock in profit.",
+    },
+    {
+        "key": "trailing_stop_activation_pct",
+        "label": "Trail activation (%)",
+        "type": "float",
+        "default": 10.0,
+        "group": "Safety",
+        "desc": "Position must gain this percentage before the trailing stop engages.",
+    },
+    {
+        "key": "trailing_stop_distance_pct",
+        "label": "Trail distance (%)",
+        "type": "float",
+        "default": 8.0,
+        "group": "Safety",
+        "desc": "How far below the running high the trailing stop sits.",
+    },
 ]
 
 

@@ -617,6 +617,43 @@ def _evaluate_position(row: dict) -> None:
     # activate. Wins remain on the TP ladder regardless of age.
     time_stop_hit, time_stop_reason = _time_stop_check(age_sec, pct_vs_entry)
 
+    # S82 P5: Trailing stop — update trail_high and trail_stop on each poll.
+    # Activation: once price rises >= trailing_stop_activation_pct above entry,
+    # the trailing stop engages. trail_stop follows price upward at
+    # trailing_stop_distance_pct below the running high.
+    _trail_enabled = _str_config("trailing_stop_enabled", "TRAILING_STOP_ENABLED", default="true").lower() == "true"
+    _trail_activation_pct = _cfg_float("trailing_stop_activation_pct", "10")
+    _trail_distance_pct = _cfg_float("trailing_stop_distance_pct", "8")
+
+    trail_high_db = float(row.get("trail_high") or 0)
+    trail_stop_db = float(row.get("trail_stop") or 0)
+    trail_stop_active = trail_stop_db > 0
+
+    if _trail_enabled and price > 0 and entry > 0:
+        activation_price = entry * (1 + _trail_activation_pct / 100)
+        if price >= activation_price:
+            if price > trail_high_db:
+                # New high — update trail_high and trail_stop
+                new_trail_stop = price * (1 - _trail_distance_pct / 100)
+                if new_trail_stop > trail_stop_db:
+                    trail_high_db = price
+                    trail_stop_db = new_trail_stop
+                    trail_stop_active = True
+                    try:
+                        conn = db_rw()
+                        conn.execute(
+                            "UPDATE positions SET trail_high=?, trail_stop=? WHERE id=?",
+                            (trail_high_db, trail_stop_db, pid),
+                        )
+                        conn.commit()
+                    except Exception as e:
+                        log.warning("Position #%d: trail_stop DB update failed: %s", pid, e)
+                    log.info(
+                        "Position #%d %s: new trail high $%.9f → trail_stop $%.9f (+%.1f%% from entry)",
+                        pid, symbol, trail_high_db, trail_stop_db,
+                        ((trail_stop_db - entry) / entry) * 100,
+                    )
+
     # Decision tree — order matters: hard stop-loss wins (once armed)
     if sl_armed and price <= sl:
         action = "SL"
@@ -627,6 +664,15 @@ def _evaluate_position(row: dict) -> None:
         log.info(
             "Position #%d %s: time-stop fired (%s) — price=$%.9f entry=$%.9f (%+.1f%%) age=%.1fmin",
             pid, symbol, time_stop_reason, price, entry, pct_vs_entry, age_sec / 60.0,
+        )
+    elif trail_stop_active and price <= trail_stop_db:
+        action = "TRAILING_STOP"
+        sell_fraction = 1.0
+        log.info(
+            "Position #%d %s: TRAILING STOP fired — price=$%.9f trail_stop=$%.9f "
+            "trail_high=$%.9f entry=$%.9f (locking in +%.1f%%)",
+            pid, symbol, price, trail_stop_db, trail_high_db, entry,
+            ((trail_stop_db - entry) / entry) * 100,
         )
     elif price >= tp50:
         action = "TP50"
