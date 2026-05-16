@@ -16,6 +16,7 @@ import Performance from './pages/Performance.jsx'
 import SignalChannels from './pages/SignalChannels.jsx'
 import Backtest      from './pages/Backtest.jsx'
 import Research      from './pages/Research.jsx'
+import Portfolio     from './pages/Portfolio.jsx'
 import { get } from './lib/api.js'
 
 export default function App() {
@@ -67,6 +68,7 @@ export default function App() {
           <Route path="channels"     element={<SignalChannels />} />
           <Route path="backtest"    element={<Backtest />} />
           <Route path="research"    element={<Research />} />
+          <Route path="portfolio"  element={<Portfolio />} />
         </Route>
       </Routes>
     </BrowserRouter>

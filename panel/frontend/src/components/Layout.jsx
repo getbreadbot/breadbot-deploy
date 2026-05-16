@@ -6,6 +6,7 @@ const NAV_OPERATIONS = [
   { to: '/dashboard', label: 'Dashboard',  icon: '▦' },
   { to: '/alerts',    label: 'Alerts',     icon: '◎', alertBadge: true },
   { to: '/positions', label: 'Positions',  icon: '◈' },
+  { to: '/portfolio', label: 'Portfolio',  icon: '◇' },
   { to: '/yields',    label: 'Yields',     icon: '⟁' },
   { to: '/controls',  label: 'Controls',   icon: '◉' },
   { to: '/channels',  label: 'Signal Channels', icon: '⊹' },

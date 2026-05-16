@@ -582,6 +582,83 @@ async def get_positions_history(limit: int = 50, auth=Depends(verify_session)):
     return {"positions": mapped}
 
 
+@router.get("/portfolio")
+async def get_portfolio(auth=Depends(verify_session)):
+    """Return live wallet balances across all chains."""
+    import os as _os
+    from dotenv import load_dotenv as _load
+    _load("/opt/projects/breadbot/.env")
+
+    balances = []
+    total_usd = 0.0
+
+    sol_wallet = _os.getenv("SOLANA_WALLET_PUBKEY", "")
+    sol_rpc = _os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
+    if sol_wallet:
+        import httpx as _hx
+        async with _hx.AsyncClient(timeout=10) as _cl:
+            try:
+                _r = await _cl.post(sol_rpc, json={"jsonrpc":"2.0","id":1,"method":"getBalance","params":[sol_wallet]})
+                sol_amt = _r.json().get("result",{}).get("value",0) / 1e9
+            except Exception:
+                sol_amt = 0
+            try:
+                _pr = await _cl.get("https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd")
+                sol_price = _pr.json().get("solana",{}).get("usd",0)
+            except Exception:
+                sol_price = 0
+            sol_val = sol_amt * sol_price
+            total_usd += sol_val
+            balances.append({"asset":"SOL","chain":"solana","amount":round(sol_amt,6),"price_usd":sol_price,"value_usd":round(sol_val,2),"wallet":sol_wallet[:8]+"..."+sol_wallet[-4:]})
+
+            try:
+                usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+                _r2 = await _cl.post(sol_rpc, json={"jsonrpc":"2.0","id":1,"method":"getTokenAccountsByOwner","params":[sol_wallet,{"mint":usdc_mint},{"encoding":"jsonParsed"}]})
+                usdc_sol = sum(float(a.get("account",{}).get("data",{}).get("parsed",{}).get("info",{}).get("tokenAmount",{}).get("uiAmount",0)) for a in _r2.json().get("result",{}).get("value",[]))
+            except Exception:
+                usdc_sol = 0
+            total_usd += usdc_sol
+            balances.append({"asset":"USDC","chain":"solana","amount":round(usdc_sol,2),"price_usd":1.0,"value_usd":round(usdc_sol,2),"wallet":sol_wallet[:8]+"..."+sol_wallet[-4:]})
+
+    base_rpc = _os.getenv("EVM_BASE_RPC_URL", "")
+    base_wallet = _os.getenv("EVM_WALLET_ADDRESS", "")
+    if base_rpc and base_wallet:
+        try:
+            from web3 import Web3 as _W3
+            _w3 = _W3(_W3.HTTPProvider(base_rpc))
+            _ck = _W3.to_checksum_address(base_wallet)
+            eth_amt = _w3.eth.get_balance(_ck) / 1e18
+            async with _hx.AsyncClient(timeout=10) as _cl:
+                try:
+                    _pr2 = await _cl.get("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd")
+                    eth_price = _pr2.json().get("ethereum",{}).get("usd",0)
+                except Exception:
+                    eth_price = 0
+            eth_val = eth_amt * eth_price
+            total_usd += eth_val
+            balances.append({"asset":"ETH","chain":"base","amount":round(eth_amt,6),"price_usd":eth_price,"value_usd":round(eth_val,2),"wallet":base_wallet[:8]+"..."+base_wallet[-4:]})
+
+            usdc_addr = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+            _abi = [{"constant":True,"inputs":[{"name":"_owner","type":"address"}],"name":"balanceOf","outputs":[{"name":"balance","type":"uint256"}],"type":"function"}]
+            _uc = _w3.eth.contract(address=_W3.to_checksum_address(usdc_addr), abi=_abi)
+            usdc_base = _uc.functions.balanceOf(_ck).call() / 1e6
+            total_usd += usdc_base
+            balances.append({"asset":"USDC","chain":"base","amount":round(usdc_base,2),"price_usd":1.0,"value_usd":round(usdc_base,2),"wallet":base_wallet[:8]+"..."+base_wallet[-4:]})
+        except Exception as _e:
+            pass
+
+    try:
+        _pd = await call_tool("get_positions", {"status": "open"})
+        _raw = _extract_list(_pd, "positions")
+        open_value = sum(float(p.get("cost_basis_usd",0)) for p in _raw)
+        total_usd += open_value
+    except Exception:
+        open_value = 0
+        _raw = []
+
+    return {"balances": balances, "open_positions_value": round(open_value,2), "open_positions_count": len(_raw), "total_usd": round(total_usd,2)}
+
+
 @router.get("/yields")
 async def get_yields(auth=Depends(verify_session)):
     data = await call_tool("get_yields")
