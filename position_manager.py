@@ -115,6 +115,28 @@ def _cfg_bool(key: str, default: str) -> bool:
     return os.getenv(key, default).strip().lower() in ("true", "1", "yes", "on")
 
 
+def _bc_str(config_key: str, env_key: str, default: str = "") -> str:
+    """Read from bot_config table, fall back to env, then default."""
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=5)
+        row = conn.execute("SELECT value FROM bot_config WHERE key=?", (config_key,)).fetchone()
+        conn.close()
+        if row and row[0] is not None:
+            return str(row[0])
+    except Exception:
+        pass
+    return os.getenv(env_key, default)
+
+
+def _bc_float(config_key: str, env_key: str, default: float = 0.0) -> float:
+    """Read from bot_config table, fall back to env, then default."""
+    val = _bc_str(config_key, env_key, str(default))
+    try:
+        return float(val)
+    except ValueError:
+        return default
+
+
 def _db_ro():
     return sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True, timeout=10)
 
@@ -621,9 +643,9 @@ def _evaluate_position(row: dict) -> None:
     # Activation: once price rises >= trailing_stop_activation_pct above entry,
     # the trailing stop engages. trail_stop follows price upward at
     # trailing_stop_distance_pct below the running high.
-    _trail_enabled = _str_config("trailing_stop_enabled", "TRAILING_STOP_ENABLED", default="true").lower() == "true"
-    _trail_activation_pct = _cfg_float("trailing_stop_activation_pct", "10")
-    _trail_distance_pct = _cfg_float("trailing_stop_distance_pct", "8")
+    _trail_enabled = _bc_str("trailing_stop_enabled", "TRAILING_STOP_ENABLED", "true").lower() == "true"
+    _trail_activation_pct = _bc_float("trailing_stop_activation_pct", "TRAILING_STOP_ACTIVATION_PCT", 10.0)
+    _trail_distance_pct = _bc_float("trailing_stop_distance_pct", "TRAILING_STOP_DISTANCE_PCT", 8.0)
 
     trail_high_db = float(row.get("trail_high") or 0)
     trail_stop_db = float(row.get("trail_stop") or 0)
