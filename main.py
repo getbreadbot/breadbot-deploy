@@ -298,6 +298,7 @@ def _log_startup_config() -> None:
         "Alt data signals":     os.getenv("ALT_DATA_ENABLED",          "false"),
         "Coinalyze signals":    os.getenv("COINALYZE_ENABLED",  "false"),
         "Helius signals":       os.getenv("HELIUS_ENABLED",     "false"),
+        "Pump.fun feed":        os.getenv("PUMP_FEED_ENABLED",   "true"),
     }
     log.info("=" * 60)
     log.info("Breadbot starting")
@@ -482,6 +483,10 @@ async def main() -> None:
         # Axiom signal poll loop (DEXScreener boosts + optional Axiom stream)
         from axiom_signals import axiom_poll_loop
         tasks.append(asyncio.create_task(axiom_poll_loop(), name="axiom_signals"))
+
+        # S82 P6: pump.fun real-time token feed (PumpPortal WebSocket)
+        from pump_feed import pump_feed_loop
+        tasks.append(asyncio.create_task(pump_feed_loop(), name="pump_feed"))
 
         # S70 P2: watchlist monitor (opt-in — needs WATCHLIST_MONITOR_ENABLED=true)
         from research_monitor import watchlist_loop

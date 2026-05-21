@@ -54,6 +54,7 @@ from alt_data_signals import (
 )
 from social_signals import get_social_score_boost, handle_alpha_command, handle_channels_command
 from axiom_signals import get_axiom_score_boost, drain_new_token_queue
+from pump_feed import drain_pump_token_queue, pump_feed_loop, get_pump_feed_status
 
 # Engine singletons — shared across poller and main loop
 _grid_engine    = GridEngine()
@@ -571,6 +572,24 @@ async def fetch_new_pairs(client: httpx.AsyncClient) -> list[dict]:
             detail["_axiom_queued"] = True
             pairs.append(detail)
         await asyncio.sleep(0.25)
+
+    # Supplement with tokens from pump.fun real-time feed
+    pump_tokens = await drain_pump_token_queue()
+    for tok in pump_tokens:
+        addr = tok.get("token_addr", "").strip()
+        if not addr or is_already_alerted(addr):
+            continue
+        _seen_tokens.add(addr)
+        detail = await _fetch_pair_detail(client, "solana", addr)
+        if detail:
+            detail["_pump_feed"] = True
+            detail["_pump_source"] = tok.get("source", "pump_feed")
+            pairs.append(detail)
+        await asyncio.sleep(0.25)
+
+    if pump_tokens:
+        log.info("pump_feed: drained %d tokens, %d passed dedup+fetch",
+                 len(pump_tokens), sum(1 for p in pairs if p.get("_pump_feed")))
 
     return pairs
 
@@ -1301,6 +1320,7 @@ async def main() -> None:
         await asyncio.gather(
             scan_loop(client),
             telegram_poller(client),
+            pump_feed_loop(),
         )
 
 
