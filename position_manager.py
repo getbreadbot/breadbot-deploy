@@ -913,7 +913,8 @@ def _load_open_positions() -> list[dict]:
             """SELECT id, chain, token_addr, token_name, symbol, entry_price,
                       quantity, cost_basis_usd, stop_loss_usd, take_profit_25,
                       take_profit_50, exchange, opened_at,
-                      COALESCE(realized_pnl_usd, 0) AS realized_pnl_usd
+                      COALESCE(realized_pnl_usd, 0) AS realized_pnl_usd,
+                      trail_high, trail_stop
                FROM positions WHERE status='open'"""
         )
         cols = [d[0] for d in cur.description]
