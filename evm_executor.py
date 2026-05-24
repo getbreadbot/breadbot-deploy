@@ -221,8 +221,17 @@ def get_quote(chain: Chain, token_in: str, token_out: str,
         "compact": True,
     }
 
-    resp = requests.post(ODOS_QUOTE_URL, json=body, timeout=_REQUEST_TIMEOUT,
-                         headers={"Content-Type": "application/json"})
+    # S82 P8: Retry on 429 with backoff (Odos rate limit)
+    for _attempt in range(3):
+        resp = requests.post(ODOS_QUOTE_URL, json=body, timeout=_REQUEST_TIMEOUT,
+                             headers={"Content-Type": "application/json"})
+        if resp.status_code == 429 and _attempt < 2:
+            _wait = 2 ** (_attempt + 1)  # 2s, 4s
+            logger.warning("Odos 429 rate limit on attempt %d, retrying in %ds", _attempt + 1, _wait)
+            import time as _time
+            _time.sleep(_wait)
+            continue
+        break
 
     # Odos returns 400 when no route exists (illiquid pair, unknown token).
     # Catch it here and return a clean no-route result instead of raising.
