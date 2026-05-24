@@ -39,6 +39,7 @@ MAX_SLIPPAGE_BPS = int(os.getenv("EVM_MAX_SLIPPAGE_BPS", "100"))
 # ── Odos aggregator ───────────────────────────────────────────────────────────
 ODOS_QUOTE_URL    = "https://api.odos.xyz/sor/quote/v2"
 ODOS_ASSEMBLE_URL = "https://api.odos.xyz/sor/assemble"
+ODOS_API_KEY      = os.getenv("ODOS_API_KEY", "")  # Free tier: register at docs.odos.xyz
 
 # Chain IDs
 _CHAIN_IDS = {"base": 8453, "arbitrum": 42161}
@@ -198,6 +199,14 @@ def _ensure_approval(chain: Chain, token: str, spender: str,
 
 # ── Odos quote ─────────────────────────────────────────────────────────────────
 
+def _odos_headers() -> dict:
+    """Build headers for Odos API requests, including API key if configured."""
+    h = {"Content-Type": "application/json"}
+    if ODOS_API_KEY:
+        h["Authorization"] = f"Bearer {ODOS_API_KEY}"
+    return h
+
+
 def get_quote(chain: Chain, token_in: str, token_out: str,
               amount_in: int, **kwargs) -> dict:
     """
@@ -224,7 +233,7 @@ def get_quote(chain: Chain, token_in: str, token_out: str,
     # S82 P8: Retry on 429 with backoff (Odos rate limit)
     for _attempt in range(3):
         resp = requests.post(ODOS_QUOTE_URL, json=body, timeout=_REQUEST_TIMEOUT,
-                             headers={"Content-Type": "application/json"})
+                             headers=_odos_headers())
         if resp.status_code == 429 and _attempt < 2:
             _wait = 2 ** (_attempt + 1)  # 2s, 4s
             logger.warning("Odos 429 rate limit on attempt %d, retrying in %ds", _attempt + 1, _wait)
@@ -312,7 +321,7 @@ def build_swap_tx(chain: Chain, token_in: str, token_out: str,
     }
 
     resp = requests.post(ODOS_ASSEMBLE_URL, json=body, timeout=_REQUEST_TIMEOUT,
-                         headers={"Content-Type": "application/json"})
+                         headers=_odos_headers())
     resp.raise_for_status()
     data = resp.json()
 

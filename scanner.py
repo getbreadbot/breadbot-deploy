@@ -1004,9 +1004,16 @@ async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
     """Process a single inline keyboard callback (buy_N, confirm_buy_N, cancel_buy_N, skip_N)."""
     if not cb:
         return
-    # Security: only process callbacks from the authorised chat
+
+    # S82 P9: Debug logging for callback delivery diagnosis
     _cb_chat_id = str((cb.get("message") or {}).get("chat", {}).get("id", ""))
+    _cb_data = cb.get("data", "")
+    log.info("Telegram callback received: data=%s chat_id=%s expected=%s",
+             _cb_data, _cb_chat_id, TELEGRAM_CHAT_ID)
+
+    # Security: only process callbacks from the authorised chat
     if TELEGRAM_CHAT_ID and _cb_chat_id != str(TELEGRAM_CHAT_ID):
+        log.warning("Telegram callback REJECTED: chat_id mismatch (%s != %s)", _cb_chat_id, TELEGRAM_CHAT_ID)
         return
     cb_id    = cb.get("id")
     data     = cb.get("data", "")
@@ -1030,9 +1037,9 @@ async def _handle_callback(client: httpx.AsyncClient, cb: dict | None) -> None:
     elif data.startswith("cancel_buy_"):
         alert_id = int(data.split("_", 2)[2])
         _pending_confirms.pop(alert_id, None)
-        update_alert_decision(alert_id, "skip")
-        reply = "❌ Buy cancelled."
-        log.info("Manual BUY cancelled for alert_id=%d", alert_id)
+        update_alert_decision(alert_id, "pending")
+        reply = "❌ Buy cancelled — alert reverted to pending. Tap BUY to try again."
+        log.info("Manual BUY cancelled for alert_id=%d — reverted to pending", alert_id)
 
     elif data.startswith("buy_"):
         # FIRST CLICK — arm confirmation, swap to confirm keyboard.
