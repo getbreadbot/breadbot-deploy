@@ -11,9 +11,9 @@ The daily loss limit and trading_paused flag are ALWAYS enforced,
 regardless of mode. These cannot be bypassed.
 
 Strategy presets:
-  conservative  — score >= 96 | market_cap < $1M  | 0.5x position size
-  balanced      — score >= 78 | market_cap < $2M  | 1.0x position size (default)
-  aggressive    — score >= 68 | market_cap < $5M  | 1.5x position size (capped at max)
+  conservative  — score >= 96 | 0.5x position size
+  balanced      — score >= 78 | 1.0x position size (default)
+  aggressive    — score >= 68 | 1.5x position size (capped at max)
 
 New .env / bot_config keys:
   execution_mode       / EXECUTION_MODE         manual|auto       (default: manual)
@@ -55,21 +55,21 @@ except ImportError:
 STRATEGIES: dict[str, dict] = {
     "conservative": {
         "min_score":        96,
-        "max_market_cap":   1_000_000,
+        "max_market_cap":   float("inf"),  # S82: removed mcap cap
         "position_multiplier": 0.5,
-        "description": "Score 96+, market cap under $1M, half position size",
+        "description": "Score 96+, half position size",
     },
     "balanced": {
         "min_score":        78,
-        "max_market_cap":   2_000_000,
+        "max_market_cap":   float("inf"),  # S82: removed mcap cap
         "position_multiplier": 1.0,
-        "description": "Score 78+, market cap under $2M, full position size",
+        "description": "Score 78+, full position size",
     },
     "aggressive": {
         "min_score":        68,
-        "max_market_cap":   5_000_000,
+        "max_market_cap":   float("inf"),  # S82: removed mcap cap
         "position_multiplier": 1.5,
-        "description": "Score 68+, market cap under $5M, 1.5x position size (capped at max)",
+        "description": "Score 68+, 1.5x position size (capped at max)",
     },
 }
 
