@@ -37,9 +37,10 @@ ARBITRUM_RPC     = os.getenv("EVM_ARBITRUM_RPC_URL", "").strip()
 MAX_SLIPPAGE_BPS = int(os.getenv("EVM_MAX_SLIPPAGE_BPS", "100"))
 
 # ── Odos aggregator ───────────────────────────────────────────────────────────
-ODOS_QUOTE_URL    = "https://api.odos.xyz/sor/quote/v2"
-ODOS_ASSEMBLE_URL = "https://api.odos.xyz/sor/assemble"
 ODOS_API_KEY      = os.getenv("ODOS_API_KEY", "")  # Free tier: register at docs.odos.xyz
+_ODOS_BASE        = "https://enterprise-api.odos.xyz" if ODOS_API_KEY else "https://api.odos.xyz"
+ODOS_QUOTE_URL    = f"{_ODOS_BASE}/sor/quote/v2"
+ODOS_ASSEMBLE_URL = f"{_ODOS_BASE}/sor/assemble"
 
 # Chain IDs
 _CHAIN_IDS = {"base": 8453, "arbitrum": 42161}
@@ -203,7 +204,7 @@ def _odos_headers() -> dict:
     """Build headers for Odos API requests, including API key if configured."""
     h = {"Content-Type": "application/json"}
     if ODOS_API_KEY:
-        h["Authorization"] = f"Bearer {ODOS_API_KEY}"
+        h["x-api-key"] = ODOS_API_KEY
     return h
 
 
