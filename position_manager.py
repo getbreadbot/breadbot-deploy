@@ -662,7 +662,7 @@ def _evaluate_position(row: dict) -> None:
                     trail_stop_db = new_trail_stop
                     trail_stop_active = True
                     try:
-                        conn = db_rw()
+                        conn = _db_rw()
                         conn.execute(
                             "UPDATE positions SET trail_high=?, trail_stop=? WHERE id=?",
                             (trail_high_db, trail_stop_db, pid),
