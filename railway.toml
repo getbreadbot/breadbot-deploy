@@ -205,6 +205,19 @@ name = "AXIOM_SESSION_COOKIE"
 description = "Axiom auth cookie (auth-access-token + auth-refresh-token). Extract from Chrome DevTools → Application → Cookies → axiom.trade. Enables Axiom pump stream scoring (+6 per hit). Leave blank to use DEXScreener boosts only."
 required = false
 
+# ── Optional: Odos DEX aggregator (Base chain) ───────────────────────────────
+[[deploy.envVars]]
+name = "ODOS_API_KEY"
+description = "Odos DEX aggregator API key — free at dashboard.odos.xyz. Enables Base chain trade execution with better routing. Without this key, Base trades still work but may hit rate limits."
+required = false
+
+# ── Optional: pump.fun real-time feed ─────────────────────────────────────────
+[[deploy.envVars]]
+name = "PUMP_FEED_ENABLED"
+description = "Set to true to enable real-time pump.fun token feed via PumpPortal WebSocket. Streams new Solana token launches and migrations as they happen. Default: false."
+required = false
+defaultValue = "false"
+
 [[deploy.envVars]]
 name = "WATCHLIST_MONITOR_ENABLED"
 description = "Set to 'true' to enable Telegram alerts on watchlist coins. When enabled, the bot polls every coin in your watchlist every 5 minutes and alerts when the rug score drops 15+ points or the price moves 20%+ from baseline. Default: false (you can still add coins to the watchlist with this off — they just will not generate alerts)."
