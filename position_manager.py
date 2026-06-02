@@ -638,10 +638,17 @@ def _evaluate_position(row: dict) -> None:
     _last_pct_cache[pid] = pct_vs_entry  # S80 P3a
     # S63 P0: source of truth for "TP25 already fired" is positions.realized_pnl_usd,
     # not the in-memory _partial_taken dict. Dict survives only within one bot
-    # process; DB survives restarts. If realized_pnl_usd > 0 on an open position,
-    # the TP25 leg has already been booked and only 50% of cost remains.
+    # process; DB survives restarts. On an OPEN position the only writer of
+    # realized_pnl_usd is the TP25 partial leg (_mark_closed sets status=closed),
+    # so ANY nonzero value means the partial has been booked and only 50% of cost
+    # remains.
+    # S84 P2: was `> 0`, which assumed the TP25 leg is always a gain. A TP25 that
+    # fills with heavy slippage can book a net LOSS (e.g. #140 FISTFLOOR: TP25 at
+    # 3000bps → realized -5.80). With `> 0` a negative partial read as "not done",
+    # so after a restart (in-memory dict cleared) the position re-fired TP25 and
+    # double-sold another 50%. Test for nonzero, not positive.
     already_realized = float(row.get("realized_pnl_usd") or 0)
-    partial_done = already_realized > 0 or _partial_taken.get(pid, False)
+    partial_done = abs(already_realized) > 1e-9 or _partial_taken.get(pid, False)
 
     # S62 P1: SL arming delay. For the first 120 seconds after entry, skip SL
     # checks. Rationale: pullback-monitor buys execute into steep downdrafts
