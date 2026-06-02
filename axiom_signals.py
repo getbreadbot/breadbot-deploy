@@ -153,6 +153,7 @@ _axiom_stream_cache: dict[str, float] = {}
 # Structure: [{token_addr, chain, mcap_sol, symbol, name, created_at, socials}]
 _new_token_queue: list[dict] = []
 _queue_lock = asyncio.Lock()
+_live_tokens: dict[str, dict] = {}   # S84 P5: pump.fun livestream attention (numParticipants)
 
 # ── DEXScreener Boost Feed ────────────────────────────────────────────────────
 
@@ -339,6 +340,22 @@ async def _poll_axiom_stream(client: httpx.AsyncClient) -> None:
                     _axiom_stream_cache[addr] = now
                     new_count += 1
 
+                # S84 P5: capture pump.fun livestream viewer count (numParticipants).
+                # isCurrentlyLive == the token creator is streaming; participants
+                # is the live spectator count -- a real-time attention proxy.
+                if alert.get("isCurrentlyLive"):
+                    _live_tokens[addr] = {
+                        "token_addr":   alert.get("tokenAddress", ""),
+                        "ticker":       alert.get("tokenTicker", ""),
+                        "name":         alert.get("tokenName", ""),
+                        "participants": int(alert.get("numParticipants") or 0),
+                        "mcap_sol":     float(alert.get("marketCapSol") or 0),
+                        "stream_start": alert.get("streamStartTime"),
+                        "updated_at":   now,
+                    }
+                else:
+                    _live_tokens.pop(addr, None)
+
                 # Queue for scanner if above min mcap and not already seen
                 mcap_sol = float(alert.get("marketCapSol") or 0)
                 if mcap_sol >= AXIOM_MIN_MCAP_SOL and is_new:
@@ -354,6 +371,9 @@ async def _poll_axiom_stream(client: httpx.AsyncClient) -> None:
                         "telegram":   alert.get("telegram", ""),
                         "website":    alert.get("website", ""),
                         "created_at": alert.get("createdAt", ""),
+                        "num_participants": int(alert.get("numParticipants") or 0),
+                        "is_live":          bool(alert.get("isCurrentlyLive")),
+                        "stream_start":     alert.get("streamStartTime"),
                         "queued_at":  now,
                     })
 
@@ -363,9 +383,14 @@ async def _poll_axiom_stream(client: httpx.AsyncClient) -> None:
         for k in stale:
             del _axiom_stream_cache[k]
 
+        # S84 P5: prune stale livestream entries (same window)
+        live_stale = [k for k, v in _live_tokens.items() if v.get("updated_at", 0) < cutoff]
+        for k in live_stale:
+            del _live_tokens[k]
+
         log.info(
-            "axiom_signals: Axiom stream updated — %d alerts, %d new tokens, cache=%d",
-            len(alerts), new_count, len(_axiom_stream_cache)
+            "axiom_signals: Axiom stream updated — %d alerts, %d new tokens, cache=%d, live=%d",
+            len(alerts), new_count, len(_axiom_stream_cache), len(_live_tokens)
         )
 
     except Exception as exc:
@@ -463,6 +488,16 @@ async def axiom_poll_loop() -> None:
 
 
 # ── Status summary ────────────────────────────────────────────────────────────
+
+def get_live_tokens() -> list[dict]:
+    """S84 P5: tokens currently livestreaming on pump.fun (via the Axiom feed),
+    sorted by viewer count (numParticipants) descending. Read-only attention
+    monitor -- does not affect scoring or trading."""
+    now = time.time()
+    items = [v for v in _live_tokens.values()
+             if now - v.get("updated_at", 0) < AXIOM_STREAM_WINDOW]
+    return sorted(items, key=lambda x: x.get("participants", 0), reverse=True)
+
 
 def get_status() -> dict:
     """Return current cache stats for /status or MCP reporting."""

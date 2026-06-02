@@ -1156,6 +1156,35 @@ async def _handle_message(client: httpx.AsyncClient, msg: dict | None) -> None:
         await handle_sell_now_command(client, args)
     elif cmd == "status":
         await handle_status_command(client)
+    elif cmd == "live":
+        await handle_live_command(client)
+
+async def handle_live_command(client: httpx.AsyncClient) -> None:
+    """Handle /live -- tokens currently livestreaming on pump.fun, by viewers.
+
+    Surfaces the numParticipants signal from the Axiom pump-live-stream feed.
+    Read-only attention monitor; does not affect scoring or trading.
+    """
+    try:
+        from axiom_signals import get_live_tokens
+        live = get_live_tokens()
+    except Exception as exc:
+        await send_message(client, f"/live unavailable: {exc}")
+        return
+    if not live:
+        await send_message(client, "No tokens currently livestreaming in the Axiom feed.")
+        return
+    lines = ["<b>Live now -- pump.fun streams</b>\n"]
+    for t in live[:15]:
+        label = t.get("ticker") or t.get("name") or (t.get("token_addr", "")[:8])
+        lines.append(
+            f"{label}: {t.get('participants', 0)} watching "
+            f"(mcap {t.get('mcap_sol', 0):.0f} SOL)"
+        )
+    if len(live) > 15:
+        lines.append(f"\n...and {len(live) - 15} more")
+    await send_message(client, "\n".join(lines))
+
 
 async def handle_automode_command(client: httpx.AsyncClient, args: str) -> None:
     """Handle /automode on|off — toggle auto-execution mode at runtime."""
