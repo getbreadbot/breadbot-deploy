@@ -457,9 +457,22 @@ async def get_positions(auth=Depends(verify_session)):
         entry = float(p.get("entry_price") or 0)
         qty   = float(p.get("quantity") or 0)
         cost  = float(p.get("cost_basis_usd") or 0)
+        realized = float(p.get("realized_pnl_usd") or 0)
         cur   = prices.get(p.get("token_addr"))
         value_usd = (cur * qty) if (cur and qty) else None
-        pnl_usd   = (value_usd - cost) if (value_usd is not None) else None
+        # S84 P3: make open-position PnL partial-aware. After a TP25 partial the
+        # remaining wallet is ~50% of the original position, so only ~50% of the
+        # cost basis is still attributable to what we hold (cost_basis_usd is not
+        # decremented on a partial — realized_pnl_usd is the marker that one
+        # fired). The old `value - full_cost` formula ignored both the realized
+        # leg and the reduced remaining cost, which showed a phantom unrealized
+        # profit on positions that had already booked a partial loss (#140
+        # FISTFLOOR displayed +$7.74 while actually down ~$7.44). pnl_usd is now
+        # the honest unrealized PnL on the remaining tokens; realized_usd and
+        # total_pnl_usd expose the booked leg and the combined figure.
+        remaining_cost = (cost * 0.5) if abs(realized) > 1e-9 else cost
+        pnl_usd   = (value_usd - remaining_cost) if (value_usd is not None) else None
+        total_pnl_usd = (pnl_usd + realized) if (pnl_usd is not None) else None
         mapped.append({
             "id":            p.get("id"),
             "token":         p.get("token_name") or p.get("symbol") or "?",
@@ -475,6 +488,8 @@ async def get_positions(auth=Depends(verify_session)):
             "cost_basis":    cost or None,
             "value_usd":     value_usd,
             "pnl_usd":       pnl_usd,
+            "realized_usd":  realized or None,
+            "total_pnl_usd": total_pnl_usd,
             "opened_at":     p.get("opened_at"),
             "status":        p.get("status"),
             "exchange":      p.get("exchange"),
