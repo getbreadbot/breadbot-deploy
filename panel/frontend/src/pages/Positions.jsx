@@ -164,7 +164,20 @@ export default function Positions() {
                     return [
                       <tr key={p.id}>
                         <td>
-                          <div className="mono" style={{ fontWeight: 600 }}>{p.token}</div>
+                          <div className="mono" style={{ fontWeight: 600 }}>
+                            {p.token}
+                            {p.untradable && (
+                              <span
+                                title="No route on any Jupiter-indexed DEX — the bot cannot sell this position automatically. Value is real but only recoverable via a manual swap on the token's DEX."
+                                style={{
+                                  marginLeft: 6, fontSize: 9, fontWeight: 700,
+                                  letterSpacing: 0.3, padding: '1px 5px', borderRadius: 4,
+                                  color: '#92400e', background: 'rgba(245,158,11,0.18)',
+                                  border: '1px solid rgba(245,158,11,0.4)', verticalAlign: 'middle',
+                                }}
+                              >STUCK</span>
+                            )}
+                          </div>
                           {p.contract && (
                             <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--mono)' }}>
                               {p.contract.slice(0, 8)}…

@@ -493,6 +493,12 @@ async def get_positions(auth=Depends(verify_session)):
             "opened_at":     p.get("opened_at"),
             "status":        p.get("status"),
             "exchange":      p.get("exchange"),
+            # S84 P4: parked_reason is set by the position manager when a token
+            # cannot be sold (no route on any Jupiter-indexed DEX). Surfaced so
+            # the UI can badge the position as stuck/unrealizable rather than a
+            # normal live hold.
+            "parked_reason": p.get("parked_reason"),
+            "untradable":    bool(p.get("parked_reason")),
         })
     return {"positions": mapped}
 

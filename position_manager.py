@@ -157,6 +157,53 @@ def _db_rw():
     return c
 
 
+def _set_parked_reason(position_id: int, reason: str | None) -> None:
+    """S84 P4: persist (or clear) the untradable-parked flag on the position row.
+
+    This is what lets the panel badge a stuck position and what lets the
+    in-memory _untradable_parked gate be rehydrated after a restart (otherwise
+    a restart clears the gate and the position immediately re-attempts the sell
+    and re-alerts). Best-effort: a failure here never blocks trade logic.
+    """
+    try:
+        conn = _db_rw()
+        try:
+            conn.execute(
+                "UPDATE positions SET parked_reason=? WHERE id=?",
+                (reason, position_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as exc:
+        log.error("Failed to set parked_reason for #%d: %s", position_id, exc)
+
+
+def _rehydrate_parked() -> None:
+    """S84 P4: on startup, reload positions still flagged untradable into the
+    in-memory gate so they are not immediately re-attempted (and re-alerted)
+    on the first poll after a restart. Timestamped 'now' so the first recheck
+    is one full _UNTRADABLE_RECHECK_SECONDS out, matching steady-state cadence.
+    """
+    try:
+        conn = _db_rw()
+        try:
+            rows = conn.execute(
+                "SELECT id FROM positions WHERE status='open' "
+                "AND parked_reason IS NOT NULL"
+            ).fetchall()
+        finally:
+            conn.close()
+        now = time.time()
+        for r in rows:
+            _untradable_parked[int(r[0])] = now
+        if rows:
+            log.info("position_manager: rehydrated %d parked position(s): %s",
+                     len(rows), [int(r[0]) for r in rows])
+    except Exception as exc:
+        log.error("Failed to rehydrate parked positions: %s", exc)
+
+
 def _fetch_price_usd(chain: str, token_addr: str) -> float | None:
     """Best-effort current price via DEXScreener. Returns None if no pairs."""
     try:
@@ -395,7 +442,8 @@ def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = 
                   SET status='closed',
                       closed_at=datetime('now'),
                       realized_pnl_usd = COALESCE(realized_pnl_usd, 0) + COALESCE(?, 0),
-                      exit_price       = COALESCE(?, exit_price)
+                      exit_price       = COALESCE(?, exit_price),
+                      parked_reason    = NULL
                 WHERE id=?""",
             (realized_pnl, exit_price, position_id),
         )
@@ -910,6 +958,7 @@ def _evaluate_position(row: dict) -> None:
             # hourly, so liquidity migrating to an indexed DEX is picked up
             # automatically, and this alert is rate-limited to ~1/hr.
             _untradable_parked[pid] = now
+            _set_parked_reason(pid, "no_jupiter_route")  # S84 P4: persist for panel badge + restart rehydrate
             log.warning(
                 "Position #%d %s: %s — no Jupiter route; parking, recheck in %ds",
                 pid, symbol, action, _UNTRADABLE_RECHECK_SECONDS,
@@ -1063,6 +1112,8 @@ async def position_manager_loop() -> None:
         "position_manager: starting (tick=%ds, slow=%ds, fast=%ds when age<%ds and pct<=-%.1f%%)",
         tick, slow_interval, fast_interval, fast_age_max, fast_drawdown_pct,
     )
+
+    _rehydrate_parked()  # S84 P4: restore untradable-parked gate from DB
 
     while True:
         try:
