@@ -31,6 +31,7 @@ export default function Positions() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [closing, setClosing] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
+  const [copiedCA, setCopiedCA] = useState(null)
 
   async function loadOpen() {
     try {
@@ -179,8 +180,19 @@ export default function Positions() {
                             )}
                           </div>
                           {p.contract && (
-                            <div style={{ fontSize: 10, color: 'var(--text-3)', fontFamily: 'var(--mono)' }}>
-                              {p.contract.slice(0, 8)}…
+                            <div
+                              onClick={() => {
+                                navigator.clipboard?.writeText(p.contract).then(() => {
+                                  setCopiedCA(p.id)
+                                  setTimeout(() => setCopiedCA(c => (c === p.id ? null : c)), 1400)
+                                }).catch(() => {})
+                              }}
+                              title={p.contract + ' (click to copy full address)'}
+                              style={{ fontSize: 10, fontFamily: 'var(--mono)', cursor: 'pointer',
+                                       userSelect: 'all',
+                                       color: copiedCA === p.id ? 'var(--green)' : 'var(--text-3)' }}
+                            >
+                              {copiedCA === p.id ? '\u2713 copied' : `${p.contract.slice(0, 8)}\u2026${p.contract.slice(-6)}`}
                             </div>
                           )}
                         </td>
