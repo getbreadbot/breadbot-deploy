@@ -96,6 +96,27 @@ def get_quote(
         "maxAccounts": 64,
     }
     resp = requests.get(JUPITER_QUOTE_URL, params=params, timeout=10)
+    # S84 P1: classify "token not tradable" distinctly. Jupiter returns HTTP 400
+    # with {"errorCode":"TOKEN_NOT_TRADABLE"} when a mint's only liquidity sits on
+    # an AMM program Jupiter does not index (e.g. the Rise AMM, program
+    # RiseZSHaLdj7pfn1tisUoSdG2i3QcVz9sQKuaRG9rar). raise_for_status() would mask
+    # this as a generic "400 Client Error" string with no body, so the position
+    # manager could not tell a permanent no-route condition from a transient
+    # failure and retried forever on the 120s cooldown. Surface a typed marker
+    # the caller can match on. NOT terminal for the token itself — liquidity may
+    # later migrate to an indexed DEX — so the caller parks and rechecks hourly.
+    if resp.status_code == 400:
+        try:
+            _body = resp.json()
+        except Exception:
+            _body = {}
+        _jcode = (_body.get("errorCode") or "").upper()
+        _jmsg = (_body.get("error") or "").lower()
+        if _jcode == "TOKEN_NOT_TRADABLE" or "not tradable" in _jmsg:
+            raise RuntimeError(
+                f"TOKEN_NOT_TRADABLE: {input_mint} has no route on any "
+                f"Jupiter-indexed DEX"
+            )
     resp.raise_for_status()
     data = resp.json()
     if not data or "outAmount" not in data:

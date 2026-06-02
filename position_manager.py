@@ -96,6 +96,16 @@ _partial_taken: dict[int, bool] = {}
 _last_action_ts: dict[int, float] = {}
 _ACTION_COOLDOWN_SECONDS = 120
 
+# S84 P1: positions whose token has no route on any Jupiter-indexed DEX are
+# "parked" here (pid → timestamp). While parked they are skipped entirely
+# rather than retried every 120s. After _UNTRADABLE_RECHECK_SECONDS the gate
+# in _evaluate_position pops the entry and lets one normal evaluation through;
+# if a route now exists the sell proceeds, otherwise it re-parks. Cleared on
+# position close. In-memory only — a restart clears it and the position is
+# re-evaluated fresh, which is the correct behaviour (no schema change).
+_untradable_parked: dict[int, float] = {}
+_UNTRADABLE_RECHECK_SECONDS = 3600
+
 
 def _cfg_float(key: str, default: str) -> float:
     try:
@@ -265,6 +275,18 @@ def _sell_solana(
         # different, smaller route. Return TX_TOO_LARGE so the escalator
         # continues rather than falling to 2-min cooldown.
         msg = str(exc).lower()
+        # S84 P1: token has no route on any Jupiter-indexed DEX. get_quote raises
+        # a typed "TOKEN_NOT_TRADABLE" RuntimeError for the HTTP 400 case, and
+        # "returned no route" for the empty-route case. Both are permanent for
+        # the current routing path — do NOT retry on the 120s cooldown. The
+        # caller parks the position and rechecks hourly.
+        if (
+            "token_not_tradable" in msg
+            or "no route on any" in msg
+            or "returned no route" in msg
+            or "not tradable" in msg
+        ):
+            return False, 0.0, "UNTRADABLE"
         if (
             "base64 encoded too large" in msg
             or "could not be decoded" in msg
@@ -392,6 +414,7 @@ def _mark_closed(position_id: int, note: str = "", realized_pnl: float | None = 
         conn.close()
     _partial_taken.pop(position_id, None)
     _last_action_ts.pop(position_id, None)
+    _untradable_parked.pop(position_id, None)  # S84 P1: clear untradable park on close
     pnl_str = f" pnl=${realized_pnl:+.2f}" if realized_pnl is not None else ""
     log.info("Position #%d marked closed%s%s", position_id, f" ({note})" if note else "", pnl_str)
 
@@ -575,6 +598,22 @@ def _evaluate_position(row: dict) -> None:
 
     # Cooldown check — don't retry within cooldown window
     now = time.time()
+
+    # S84 P1: untradable-parked gate. A position whose token has no Jupiter
+    # route was parked by the escalation loop. Skip it until the recheck window
+    # elapses, then pop and fall through for one normal evaluation — if a route
+    # now exists the sell proceeds, otherwise it re-parks. Without this the
+    # position would re-trigger every 120s forever (see #140 FISTFLOOR).
+    _parked_ts = _untradable_parked.get(pid)
+    if _parked_ts is not None:
+        if now - _parked_ts < _UNTRADABLE_RECHECK_SECONDS:
+            _log_exit_poll(pid, observed_price=None, pct_vs_entry=None,
+                           age_sec=None, action_decided="untradable_parked")
+            return
+        _untradable_parked.pop(pid, None)
+        log.info("Position #%d %s: untradable recheck window elapsed — re-evaluating",
+                 pid, symbol)
+
     last = _last_action_ts.get(pid, 0)
     if now - last < _ACTION_COOLDOWN_SECONDS:
         _log_exit_poll(pid, observed_price=None, pct_vs_entry=None,
@@ -856,6 +895,27 @@ def _evaluate_position(row: dict) -> None:
                     pid, symbol, action, try_slip, err_code)
 
     if not success:
+        if err_code == "UNTRADABLE":
+            # S84 P1: token has no route on any Jupiter-indexed DEX (its only
+            # liquidity is on an unindexed AMM such as Rise). Permanent for the
+            # current routing path — park instead of retrying every 120s, which
+            # spammed 55 alerts on #140 FISTFLOOR. The parked gate rechecks
+            # hourly, so liquidity migrating to an indexed DEX is picked up
+            # automatically, and this alert is rate-limited to ~1/hr.
+            _untradable_parked[pid] = now
+            log.warning(
+                "Position #%d %s: %s — no Jupiter route; parking, recheck in %ds",
+                pid, symbol, action, _UNTRADABLE_RECHECK_SECONDS,
+            )
+            from scanner import _format_token_label
+            _label_u = _format_token_label(symbol, token_name)
+            _send_telegram(
+                f"⏸️ Position Manager: {action} for {_label_u} (#{pid}) cannot execute — "
+                f"no Jupiter route (token liquidity is on an unindexed DEX).\n"
+                f"price=${price:.9f} entry=${entry:.9f} ({pct_vs_entry:+.1f}%)\n"
+                f"Position parked; rechecking hourly. Manual exit may be required."
+            )
+            return
         log.warning("Position #%d %s: %s sell did not confirm (err=%s, last_slippage=%dbps) — will retry after cooldown",
                     pid, symbol, action, err_code, try_slip)
         from scanner import _format_token_label
