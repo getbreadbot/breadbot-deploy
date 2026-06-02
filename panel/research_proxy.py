@@ -274,6 +274,7 @@ class BuyRequest(BaseModel):
     score:      int   = Field(..., ge=0, le=100)
     market_cap: float = Field(0.0, ge=0)
     price_usd:  float = Field(..., gt=0)
+    override:   bool  = False
 
 
 @router.post("/buy")
@@ -313,8 +314,23 @@ def research_buy(payload: BuyRequest, _: bool = Depends(verify_session)):
     # manual buys we still respect them so the user knows. Returning 422
     # signals the UI to prompt: "Override?" — for now, hold the line and
     # surface the reason. P3 enhancement: an `override=True` flag.
-    if not decision.executed:
+    # S84 P7: a research-page buy is a deliberate manual action. evaluate()
+    # returns executed=False in manual mode REGARDLESS of score (it defers to
+    # manual approval) -- which made this endpoint 422 on every manual-mode buy
+    # and never reach the force-execute below. Allow an explicit override of the
+    # advisory (non-blocked) declines; hard blocks above are never overridable.
+    if not decision.executed and not payload.override:
         raise HTTPException(status_code=422, detail=decision.reason)
+
+    # Size the position. evaluate() only fills position_usd when it auto-executes;
+    # for an overridden manual buy it is 0, so compute it from the same score-
+    # scaled logic and write it back so execute + record + response all agree.
+    if decision.position_usd <= 0:
+        from auto_executor import STRATEGIES
+        _mult = STRATEGIES[ae.strategy_name]["position_multiplier"]
+        decision.position_usd = ae._calc_position(int(payload.score or 0), _mult)
+    if decision.position_usd <= 0:
+        raise HTTPException(status_code=500, detail="computed position size was zero")
 
     ok = execute_trade(
         chain=chain,

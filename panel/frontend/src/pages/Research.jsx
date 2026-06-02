@@ -190,6 +190,8 @@ export default function Research() {
   const [error,   setError]   = useState('')
   const [buying,  setBuying]  = useState(false)
   const [buyMsg,  setBuyMsg]  = useState('')
+  const [buyOk,   setBuyOk]   = useState(false)
+  const [overridable, setOverridable] = useState(false)
   const [watching, setWatching] = useState(false)
   const [items,   setItems]   = useState([])
 
@@ -218,9 +220,10 @@ export default function Research() {
     }
   }, [addr])
 
-  const handleBuy = useCallback(async () => {
+  const handleBuy = useCallback(async (override = false) => {
     if (!data) return
-    setBuying(true); setBuyMsg('')
+    setBuying(true); setBuyMsg(''); setBuyOk(false)
+    if (!override) setOverridable(false)
     try {
       const dex = data.dexscreener || {}
       const res = await post('/research/buy', {
@@ -230,10 +233,22 @@ export default function Research() {
         score:      data.rug_score || 0,
         market_cap: dex.market_cap || 0,
         price_usd:  dex.price_usd  || 0,
+        override,
       })
-      setBuyMsg(`Order submitted: ${res.reason}`)
+      const sz = typeof res.position_usd === 'number'
+        ? `$${res.position_usd.toFixed(2)}` : res.position_usd
+      setBuyMsg(`Order submitted (${res.strategy || 'manual'}): ${sz}` +
+                (res.warning ? ' - ' + res.warning : ''))
+      setBuyOk(true); setOverridable(false)
     } catch (e) {
-      setBuyMsg(`Buy failed: ${e.message}`)
+      if (e.status === 422) {
+        // Advisory decline (manual mode / below auto threshold) -- overridable.
+        setBuyMsg(e.message)
+        setOverridable(true)
+      } else {
+        setBuyMsg(`Buy failed: ${e.message}`)
+        setOverridable(false)
+      }
     } finally {
       setBuying(false)
     }
@@ -333,7 +348,7 @@ export default function Research() {
                               flexWrap: 'wrap' }}>
                   <button
                     className="btn btn-amber"
-                    onClick={handleBuy}
+                    onClick={() => handleBuy(false)}
                     disabled={!buyable || buying}
                     title={buyable ? '' : 'Buy requires Solana/Base + DEXScreener price'}
                   >
@@ -349,8 +364,19 @@ export default function Research() {
                 </div>
               )}
               {buyMsg && (
-                <div style={{ fontSize: 12, color: 'var(--text-3)',
-                              marginBottom: 12 }}>{buyMsg}</div>
+                <div style={{ fontSize: 13, marginBottom: 12,
+                              color: buyOk ? 'var(--green)'
+                                     : (overridable ? '#f59e0b' : 'var(--red)') }}>
+                  {buyMsg}
+                  {overridable && (
+                    <button
+                      className="btn btn-amber"
+                      onClick={() => handleBuy(true)}
+                      disabled={buying}
+                      style={{ marginLeft: 10, padding: '2px 10px', fontSize: 12 }}
+                    >{buying ? 'Submitting…' : 'Buy anyway'}</button>
+                  )}
+                </div>
               )}
 
               {/* DEXScreener block */}
