@@ -71,7 +71,15 @@ if FRONTEND_DIR.exists():
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="Not found")
         index = FRONTEND_DIR / "index.html"
-        return FileResponse(index)
+        # S84 P8: never cache index.html. Asset filenames are content-hashed and
+        # safe to cache forever, but a cached index.html keeps pointing at an old
+        # bundle, so after a deploy the browser silently runs stale JS (this is
+        # why the research-page buy fix did not take effect for the operator).
+        return FileResponse(index, headers={
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        })
 else:
     @app.get("/")
     async def no_frontend():
