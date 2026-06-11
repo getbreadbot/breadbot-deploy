@@ -360,7 +360,7 @@ def research_buy(payload: BuyRequest, _: bool = Depends(verify_session)):
         }
         # Research-page buys have no source alert_id. Pass 0 — record_position
         # accepts it and does not enforce a foreign-key relationship.
-        pos_id = record_position(pair, _Result(decision.position_usd), 0)
+        pos_id = record_position(pair, _Result(decision.position_usd), 0, fill=ok)
     except Exception as exc:
         log.error("research_buy: record_position failed (trade DID fire): %s", exc, exc_info=True)
         return {

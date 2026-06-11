@@ -24,6 +24,52 @@ load_dotenv(Path(__file__).parent / ".env")
 
 log = logging.getLogger("exchange_executor")
 
+import requests
+from dataclasses import dataclass
+
+
+@dataclass
+class TradeFill:
+    """Result of execute_trade. Bool-compatible: truthy iff the buy succeeded.
+
+    S85 P2: replaces the old bare-bool return so the actual on-chain fill
+    quantity flows back to record_position instead of being recomputed as
+    cost/price (notional), which was wrong whenever the fill price differed
+    from the DEXScreener alert price (root cause of the #140 quantity skew).
+    """
+    success: bool
+    position_usd: float = 0.0
+    fill_qty: float = 0.0          # actual tokens received (human units); 0 = unknown
+    fill_price: float = 0.0        # effective price = position_usd / fill_qty
+    tx_sig: str = ""
+    reason: str = ""
+
+    def __bool__(self) -> bool:
+        return self.success
+
+
+def _solana_wallet_ui_balance(mint: str) -> float:
+    """On-chain human-unit balance of the bot wallet's ATA for `mint` (0.0 on any error).
+    Mirrors position_manager._get_solana_balance_raw but returns uiAmount (decimals applied)."""
+    rpc = os.getenv("SOLANA_RPC_URL", "https://api.mainnet-beta.solana.com")
+    owner = os.getenv("SOLANA_WALLET_PUBKEY", "").strip()
+    if not owner:
+        return 0.0
+    try:
+        r = requests.post(rpc, json={
+            "jsonrpc": "2.0", "id": 1, "method": "getTokenAccountsByOwner",
+            "params": [owner, {"mint": mint}, {"encoding": "jsonParsed"}],
+        }, timeout=15)
+        accts = ((r.json() or {}).get("result") or {}).get("value") or []
+        if not accts:
+            return 0.0
+        info = (((accts[0].get("account") or {}).get("data") or {}).get("parsed") or {}).get("info") or {}
+        ta = info.get("tokenAmount") or {}
+        return float(ta.get("uiAmount") or 0.0)
+    except Exception as exc:
+        log.debug("solana wallet ui balance lookup failed for %s: %s", mint, exc)
+        return 0.0
+
 def _db_get_config(key: str) -> str:
     """Read a value from bot_config table (DB-first, same as AutoExecutor)."""
     db_path = Path(__file__).parent / "data" / "cryptobot.db"
@@ -81,11 +127,11 @@ def execute_trade(
         mode = mode.lower()
         if mode != "auto":
             log.debug("execute_trade called but EXECUTION_MODE=%s — skip", mode)
-            return False
+            return TradeFill(False, reason="mode_not_auto")
 
     if position_usd <= 0:
         log.warning("execute_trade: position_usd=%s — skip", position_usd)
-        return False
+        return TradeFill(False, position_usd=position_usd, reason="zero_position")
 
     log.info(
         "Routing execution: chain=%s symbol=%s addr=%s position=$%.2f price=$%.8f",
@@ -94,17 +140,21 @@ def execute_trade(
 
     try:
         if chain == "solana":
-            return _execute_solana(token_addr, symbol, position_usd, price_usd)
+            res = _execute_solana(token_addr, symbol, position_usd, price_usd)
         elif chain == "base":
-            return _execute_base(token_addr, symbol, position_usd, price_usd)
+            res = _execute_base(token_addr, symbol, position_usd, price_usd)
         elif chain == "cex":
-            return _execute_cex(symbol, position_usd)
+            res = _execute_cex(symbol, position_usd)
         else:
             log.warning("execute_trade: unknown chain=%s — skip", chain)
-            return False
+            res = TradeFill(False, position_usd=position_usd, reason="unknown_chain")
     except Exception as exc:
         log.error("execute_trade unhandled exception: %s", exc, exc_info=True)
-        return False
+        res = TradeFill(False, position_usd=position_usd, reason="exception")
+    # Sub-executors may still return a bare bool on failure paths — normalize.
+    if isinstance(res, TradeFill):
+        return res
+    return TradeFill(bool(res), position_usd=position_usd)
 
 
 def _execute_solana(token_addr: str, symbol: str, position_usd: float, price_usd: float) -> bool:
@@ -171,11 +221,15 @@ def _execute_solana(token_addr: str, symbol: str, position_usd: float, price_usd
             confirmed, err_code = sol_exec.confirm_tx(sig)
 
             if confirmed:
+                ui_qty = _solana_wallet_ui_balance(token_addr)
+                fill_price = (position_usd / ui_qty) if ui_qty > 0 else price_usd
                 log.info(
-                    "Solana execution SUCCESS: %s $%.2f slippage=%dbps sig=%s",
-                    symbol, position_usd, slippage_bps, sig,
+                    "Solana execution SUCCESS: %s $%.2f slippage=%dbps fill_qty=%.6f "
+                    "fill_price=$%.8f sig=%s",
+                    symbol, position_usd, slippage_bps, ui_qty, fill_price, sig,
                 )
-                return True
+                return TradeFill(True, position_usd=position_usd, fill_qty=ui_qty,
+                                 fill_price=fill_price, tx_sig=sig)
 
             # Only retry on SLIPPAGE; everything else fails fast.
             if err_code != "SLIPPAGE":
@@ -225,7 +279,9 @@ def _execute_base(token_addr: str, symbol: str, position_usd: float, price_usd: 
         if result["success"]:
             log.info("Base execution confirmed: %s $%.2f tx=%s out=%d",
                      symbol, position_usd, result["tx_hash"], result["amount_out"])
-            return True
+            # fill_qty left 0 (raw out needs token decimals); record_position falls
+            # back to cost/price for Base. Solana is the dominant path and is exact.
+            return TradeFill(True, position_usd=position_usd, tx_sig=result.get("tx_hash", ""))
         else:
             log.warning("Base execution failed for %s: %s", symbol, result.get("error", "unknown"))
             return False
@@ -275,7 +331,7 @@ def _execute_cex(symbol: str, position_usd: float) -> bool:
                 "Robinhood execution SUCCESS: %s $%.2f order_id=%s state=%s",
                 symbol, position_usd, result.get("order_id"), result.get("state"),
             )
-            return True
+            return TradeFill(True, position_usd=position_usd, tx_sig=str(result.get("order_id") or ""))
         else:
             log.warning(
                 "Robinhood execution did not succeed: %s — %s",

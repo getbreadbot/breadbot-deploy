@@ -369,7 +369,7 @@ async def _immediate_execute(
         keyboard = build_buy_keyboard(alert_id, position)
         await send_message(tg_client, text, reply_markup=keyboard)
     else:
-        record_position(pair, result, alert_id)
+        record_position(pair, result, alert_id, fill=trade_ok)
         msg = build_auto_buy_message(pair, score, flags, result)
         if prefix:
             msg = prefix + msg

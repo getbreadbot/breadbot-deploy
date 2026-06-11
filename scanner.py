@@ -161,13 +161,28 @@ def update_alert_decision(alert_id: int, decision: str) -> None:
         conn.close()
 
 
-def record_position(pair: dict, result, alert_id: int) -> int | None:
+def record_position(pair: dict, result, alert_id: int, fill=None) -> int | None:
     """Insert a new open position after successful auto-execution.
-    Returns the new position row id, or None on failure."""
+    Returns the new position row id, or None on failure.
+
+    S85 P2: when `fill` (a TradeFill from execute_trade) carries a real
+    on-chain fill_qty, the position is recorded with the ACTUAL tokens
+    received and the effective fill price, instead of the old
+    quantity=cost/price (notional) that skewed PnL whenever the fill price
+    differed from the DEXScreener alert price. Falls back to cost/price when
+    the fill quantity is unavailable (Base/CEX, or a failed balance read)."""
     try:
-        price     = float(pair.get("price_usd", 0))
-        cost      = result.position_usd
-        quantity  = cost / price if price > 0 else 0
+        price       = float(pair.get("price_usd", 0))
+        cost        = result.position_usd
+        fill_qty    = (getattr(fill, "fill_qty", 0) or 0) if fill is not None else 0
+        if fill_qty and fill_qty > 0:
+            quantity    = fill_qty
+            entry_price = cost / fill_qty
+            log.info("  Fill captured: qty=%.6f entry=$%.8f (was notional $%.8f)",
+                     quantity, entry_price, price)
+        else:
+            quantity    = cost / price if price > 0 else 0
+            entry_price = price
         chain     = pair.get("chain", "solana")
         exchange  = "solana_dex" if chain == "solana" else "base_dex" if chain == "base" else "cex"
         # Stop loss and take profit from backtest-tuned defaults
@@ -188,12 +203,12 @@ def record_position(pair: dict, result, alert_id: int) -> int | None:
                     pair.get("token_addr", ""),
                     pair.get("token_name", pair.get("symbol", "UNKNOWN")),
                     pair.get("symbol", "UNKNOWN"),
-                    price,
+                    entry_price,
                     quantity,
                     cost,
-                    round(price * (1 - sl_pct), 10),
-                    round(price * (1 + tp25_pct), 10),
-                    round(price * (1 + tp50_pct), 10),
+                    round(entry_price * (1 - sl_pct), 10),
+                    round(entry_price * (1 + tp25_pct), 10),
+                    round(entry_price * (1 + tp50_pct), 10),
                     "open",
                     exchange,
                 ),

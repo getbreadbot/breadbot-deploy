@@ -208,7 +208,7 @@ def execute_manual_buy(alert_id: int) -> ManualBuyResult:
         )
 
     try:
-        pos_id = record_position(pair, _Result(decision.position_usd), alert_id)
+        pos_id = record_position(pair, _Result(decision.position_usd), alert_id, fill=ok)
     except Exception as exc:
         log.error("manual_buy: record_position exception for alert=%d: %s", alert_id, exc, exc_info=True)
         return ManualBuyResult(
