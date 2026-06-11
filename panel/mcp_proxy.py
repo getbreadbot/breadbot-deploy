@@ -552,57 +552,6 @@ async def get_positions_history(auth=Depends(verify_session)):
     return {"positions": mapped}
 
 
-@router.get("/positions/history")
-async def get_positions_history(limit: int = 50, auth=Depends(verify_session)):
-    """Return recently closed positions for the trade history tab."""
-    data = await call_tool("get_positions", {"status": "closed"})
-    raw = _extract_list(data, "positions")
-
-    mapped = []
-    for p in raw[:limit]:
-        entry = float(p.get("entry_price") or 0)
-        exit_p = float(p.get("exit_price") or 0) if p.get("exit_price") else None
-        cost = float(p.get("cost_basis_usd") or 0)
-        pnl = float(p.get("realized_pnl_usd") or 0)
-        opened = p.get("opened_at", "")
-        closed = p.get("closed_at", "")
-
-        # Compute hold duration
-        duration_str = ""
-        if opened and closed:
-            try:
-                from datetime import datetime
-                o = datetime.fromisoformat(opened)
-                c = datetime.fromisoformat(closed)
-                secs = (c - o).total_seconds()
-                if secs < 60:
-                    duration_str = f"{secs:.0f}s"
-                elif secs < 3600:
-                    duration_str = f"{secs/60:.0f}m"
-                else:
-                    duration_str = f"{secs/3600:.1f}h"
-            except Exception:
-                pass
-
-        pnl_pct = ((pnl / cost) * 100) if cost else 0
-
-        mapped.append({
-            "id":           p.get("id"),
-            "token":        p.get("token_name") or p.get("symbol") or "?",
-            "symbol":       p.get("symbol"),
-            "chain":        p.get("chain"),
-            "entry_price":  entry or None,
-            "exit_price":   exit_p,
-            "cost_basis":   cost or None,
-            "pnl_usd":      round(pnl, 2),
-            "pnl_pct":      round(pnl_pct, 1),
-            "opened_at":    opened,
-            "closed_at":    closed,
-            "duration":     duration_str,
-        })
-    return {"positions": mapped}
-
-
 @router.get("/portfolio")
 async def get_portfolio(auth=Depends(verify_session)):
     """Return live wallet balances across all chains."""
