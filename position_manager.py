@@ -626,6 +626,23 @@ def _time_stop_check(age_sec: float, pct_vs_entry: float) -> tuple[bool, str]:
     return (False, "")
 
 
+def _catastrophic_check(pct_vs_entry: float) -> tuple[bool, float]:
+    """S85 P1: always-armed deep stop-loss.
+
+    Backtest of 144 closed trades: capping losses near -30/-40% swings the book
+    from -$97 to roughly breakeven-to-+$44. The -80% to -100% losers rode to
+    ~zero because the normal SL was suppressed by the 120s arming delay and the
+    trailing stop never armed (it only arms after +10%). This check is ALWAYS
+    armed and bypasses both, so a hard dump exits early. Deep enough (-45%
+    default) to clear normal first-minute noise. Returns (hit, threshold_pct).
+    Toggle CATASTROPHIC_STOP_ENABLED / CATASTROPHIC_STOP_PCT (DB-first, no restart).
+    """
+    if _bc_str("catastrophic_stop_enabled", "CATASTROPHIC_STOP_ENABLED", "true").lower() != "true":
+        return False, 0.0
+    thr = _bc_float("catastrophic_stop_pct", "CATASTROPHIC_STOP_PCT", 45.0)
+    return (pct_vs_entry <= -thr), thr
+
+
 def _evaluate_position(row: dict) -> None:
     """Check one open position against its SL/TP levels and act if breached."""
     pid = row["id"]
@@ -770,8 +787,20 @@ def _evaluate_position(row: dict) -> None:
                         ((trail_stop_db - entry) / entry) * 100,
                     )
 
-    # Decision tree — order matters: hard stop-loss wins (once armed)
-    if sl_armed and price <= sl:
+    # S85 P1: catastrophic stop is evaluated FIRST and is always armed — it
+    # bypasses the 120s SL arming delay and the trailing-stop activation gate.
+    catastrophic_hit, _cat_thr = _catastrophic_check(pct_vs_entry)
+
+    # Decision tree — order matters: catastrophic dump first, then hard stop-loss (once armed)
+    if catastrophic_hit:
+        action = "CATASTROPHIC_STOP"
+        sell_fraction = 1.0
+        log.info(
+            "Position #%d %s: CATASTROPHIC STOP — price=$%.9f entry=$%.9f "
+            "(%+.1f%% <= -%.0f%%) selling 100%% (bypassed arming delay, age=%.0fs)",
+            pid, symbol, price, entry, pct_vs_entry, _cat_thr, age_sec,
+        )
+    elif sl_armed and price <= sl:
         action = "SL"
         sell_fraction = 1.0
     elif time_stop_hit:
