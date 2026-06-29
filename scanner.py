@@ -861,7 +861,7 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     # The user reviews every trade through the two-click confirm flow shipped
     # in S80 P4 (Telegram) / P6 (panel), giving full soak coverage of the
     # manual buy code paths and validating S80 P3/P5/P7 defenses on every fire.
-    from config import _str_config
+    from config import _str_config, _bool_config, _float_config
     _exec_mode = _str_config("execution_mode", "EXECUTION_MODE", default="auto").lower()
     if _exec_mode == "manual" and result.executed:
         # Synthesize a manual-equivalent EvaluatorResult: keep position size,
@@ -869,6 +869,23 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
         result.executed = False
         if not result.reason or "auto" in result.reason.lower():
             result.reason = f"Manual mode — review and confirm. (would have auto-fired: {result.reason})"
+
+    # S85 P4: mcap/liquidity entry gate. Backtest of 171 closed trades showed
+    # entries where market cap >> liquidity (you are exit liquidity and cannot
+    # get out cleanly) cluster at ~26% win vs ~38% for mcap/liq < 4. Demote
+    # such entries to manual review instead of auto-firing. Demote-only — the
+    # alert still appears; it just is not auto-bought. DB-tunable, default-on.
+    if result.executed:
+        if _bool_config("mcap_liq_gate_enabled", "MCAP_LIQ_GATE_ENABLED", default=True):
+            _liq  = float(pair.get("liquidity", 0) or 0)
+            _mcap = float(pair.get("mcap", 0) or 0)
+            _max_ratio = _float_config("mcap_liq_max_ratio", "MCAP_LIQ_MAX_RATIO", 4.0)
+            if _liq > 0 and _mcap > 0 and (_mcap / _liq) >= _max_ratio:
+                result.executed = False
+                result.reason = (f"mcap/liq {_mcap/_liq:.1f}x >= {_max_ratio:.0f}x — "
+                                 f"demoted to manual (exit-liquidity risk)")
+                log.info("  mcap/liq gate: %s mcap=$%.0f liq=$%.0f ratio=%.1fx — demoted to manual",
+                         symbol, _mcap, _liq, _mcap / _liq)
 
     # 3. Determine decision label for DB
     if result.blocked:
