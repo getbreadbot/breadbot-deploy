@@ -24,6 +24,7 @@ load_dotenv(Path(__file__).parent / ".env")
 
 log = logging.getLogger("exchange_executor")
 
+import time
 import requests
 from dataclasses import dataclass
 
@@ -221,8 +222,23 @@ def _execute_solana(token_addr: str, symbol: str, position_usd: float, price_usd
             confirmed, err_code = sol_exec.confirm_tx(sig)
 
             if confirmed:
-                ui_qty = _solana_wallet_ui_balance(token_addr)
+                # S85 P2b: the just-created ATA lags RPC indexing, so an
+                # immediate balance read returns 0 and we'd fall back to the
+                # notional cost/price. Retry briefly until the fill settles.
+                # The trade has already landed — this is off the latency-
+                # critical path (confirm_tx already blocked up to ~30s here).
+                ui_qty = 0.0
+                for _settle in range(5):
+                    ui_qty = _solana_wallet_ui_balance(token_addr)
+                    if ui_qty > 0:
+                        break
+                    time.sleep(1.5)
                 fill_price = (position_usd / ui_qty) if ui_qty > 0 else price_usd
+                if ui_qty <= 0:
+                    log.warning(
+                        "Solana fill qty unresolved after settle retries for %s "
+                        "(sig=%s) — recording notional cost/price fallback", symbol, sig,
+                    )
                 log.info(
                     "Solana execution SUCCESS: %s $%.2f slippage=%dbps fill_qty=%.6f "
                     "fill_price=$%.8f sig=%s",
