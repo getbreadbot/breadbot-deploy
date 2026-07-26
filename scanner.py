@@ -94,6 +94,36 @@ def db_rw():
     return conn
 
 
+def _recent_mcap_liq_pctile(lookback: int, pctile: float) -> float:
+    """Pth percentile of mcap/liquidity over the last `lookback` alerts.
+
+    S85 P4b: the fixed 4.0 gate was calibrated on June data and demoted ~95%
+    of alerts once the market shifted to routinely 8-50x ratios. This makes the
+    gate regime-relative: it returns the Pth-percentile ratio of the recent
+    alert stream so the gate demotes only the relatively-worst cohort instead
+    of a stale absolute cutoff. Returns 0.0 if there is not enough data (caller
+    falls back to the absolute floor)."""
+    import math
+    try:
+        conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        try:
+            rows = conn.execute(
+                "SELECT mcap, liquidity FROM meme_alerts "
+                "WHERE liquidity > 0 AND mcap > 0 ORDER BY id DESC LIMIT ?",
+                (int(lookback),),
+            ).fetchall()
+        finally:
+            conn.close()
+        ratios = sorted((m / l) for (m, l) in rows if l and l > 0)
+        if len(ratios) < 20:
+            return 0.0
+        k = max(0, min(len(ratios) - 1, int(math.ceil(pctile / 100.0 * len(ratios))) - 1))
+        return ratios[k]
+    except Exception as exc:
+        log.debug("adaptive mcap/liq pctile failed: %s", exc)
+        return 0.0
+
+
 def is_already_alerted(token_addr: str) -> bool:
     """True if this address appeared in meme_alerts within DEDUP_HOURS."""
     if token_addr in _seen_tokens:
@@ -877,15 +907,23 @@ async def process_pair(client: httpx.AsyncClient, pair: dict) -> None:
     # alert still appears; it just is not auto-bought. DB-tunable, default-on.
     if result.executed:
         if _bool_config("mcap_liq_gate_enabled", "MCAP_LIQ_GATE_ENABLED", default=True):
-            _liq  = float(pair.get("liquidity", 0) or 0)
-            _mcap = float(pair.get("mcap", 0) or 0)
-            _max_ratio = _float_config("mcap_liq_max_ratio", "MCAP_LIQ_MAX_RATIO", 4.0)
-            if _liq > 0 and _mcap > 0 and (_mcap / _liq) >= _max_ratio:
+            _liq   = float(pair.get("liquidity", 0) or 0)
+            _mcap  = float(pair.get("mcap", 0) or 0)
+            _floor = _float_config("mcap_liq_max_ratio", "MCAP_LIQ_MAX_RATIO", 4.0)
+            _mode  = _str_config("mcap_liq_mode", "MCAP_LIQ_MODE", default="adaptive").lower()
+            if _mode == "adaptive":
+                _pctile   = _float_config("mcap_liq_pctile", "MCAP_LIQ_PCTILE", 65.0)
+                _lookback = int(_float_config("mcap_liq_lookback", "MCAP_LIQ_LOOKBACK", 120))
+                _dyn      = _recent_mcap_liq_pctile(_lookback, _pctile)
+                _threshold = max(_floor, _dyn)   # floor guards low-ratio regimes
+            else:
+                _threshold = _floor
+            if _liq > 0 and _mcap > 0 and (_mcap / _liq) >= _threshold:
                 result.executed = False
-                result.reason = (f"mcap/liq {_mcap/_liq:.1f}x >= {_max_ratio:.0f}x — "
-                                 f"demoted to manual (exit-liquidity risk)")
-                log.info("  mcap/liq gate: %s mcap=$%.0f liq=$%.0f ratio=%.1fx — demoted to manual",
-                         symbol, _mcap, _liq, _mcap / _liq)
+                result.reason = (f"mcap/liq {_mcap/_liq:.1f}x >= {_threshold:.1f}x "
+                                 f"({_mode}) — demoted to manual (exit-liquidity risk)")
+                log.info("  mcap/liq gate [%s thr=%.1fx]: %s mcap=$%.0f liq=$%.0f ratio=%.1fx — demoted",
+                         _mode, _threshold, symbol, _mcap, _liq, _mcap / _liq)
 
     # 3. Determine decision label for DB
     if result.blocked:
