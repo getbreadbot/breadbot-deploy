@@ -8,12 +8,12 @@ restartPolicyMaxRetries = 5
 # ── Required: Telegram ────────────────────────────────────────────────────
 [[deploy.envVars]]
 name = "TELEGRAM_BOT_TOKEN"
-description = "Your Telegram bot token from @BotFather (looks like 7123456789:AAF...)"
+description = "Your Telegram bot token. In Telegram, message @BotFather, send /newbot, follow the prompts, then copy the token it gives you (looks like 7123456789:AAF...)."
 required = true
 
 [[deploy.envVars]]
 name = "TELEGRAM_CHAT_ID"
-description = "Your Telegram numeric chat ID from @userinfobot"
+description = "Your numeric Telegram ID. In Telegram, message @userinfobot and it replies with your ID number - paste that here."
 required = true
 
 # ── Required: License ─────────────────────────────────────────────────────
@@ -25,7 +25,7 @@ required = true
 # ── Required: Web Panel ───────────────────────────────────────────────────
 [[deploy.envVars]]
 name = "MCP_SECRET"
-description = "Secret key securing the connection between the bot and web panel. Use any strong random string (e.g. openssl rand -hex 32)."
+description = "A password that secures the link between your bot and its control panel. Just type a long random mix of letters and numbers (30+ characters) - you never need to remember it, it only has to be hard to guess."
 required = true
 
 [[deploy.envVars]]
